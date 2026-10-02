@@ -1,0 +1,1134 @@
+{
+  "meta": {
+    "name": "Fermi Arena",
+    "working_title_de": "Fermi-Arena – Schätzen wie im Interview",
+    "version": "0.2.0",
+    "date": "2026-10-01",
+    "author": "Achim Imboden (concept with Claude)",
+    "status": "concept + starter build (no-AI tier playable); style deferred",
+    "language": {
+      "ui": "de",
+      "spec": "en"
+    },
+    "one_liner": "A gamified Fermi-estimation trainer where the player builds a typed solution tree on a whiteboard and a mostly deterministic judge scores it; a model only answers narrow fixed-choice questions."
+  },
+  "design_principles": [
+    {
+      "id": "P1",
+      "rule": "Compute what can be computed",
+      "detail": "Accuracy, math, units, precision, calibration, time and triangulation are plain code. No model touches a number."
+    },
+    {
+      "id": "P2",
+      "rule": "Models classify, never grade",
+      "detail": "Every model call is a fixed-option question returning a probability distribution (Jev-style typed classifier). Scores come from code applied to those answers."
+    },
+    {
+      "id": "P3",
+      "rule": "Binary over scales",
+      "detail": "No Likert/1–5 judgments anywhere. Research shows graded criteria drift ~1 level low and disagree across judges; binary checks agree far better."
+    },
+    {
+      "id": "P4",
+      "rule": "Ground truth or no accuracy score",
+      "detail": "A problem only enters ranked play if its answer has a citable source or is derived deterministically from one."
+    },
+    {
+      "id": "P5",
+      "rule": "Many valid trees",
+      "detail": "Each problem stores 1..n reference trees. An unmatched but unit-consistent tree is not wrong; it is scored on structure-agnostic checks."
+    },
+    {
+      "id": "P6",
+      "rule": "Low confidence defers, not guesses",
+      "detail": "If a classifier's top option is below threshold, the item is marked 'unsicher' and excluded from the score rather than silently decided."
+    },
+    {
+      "id": "P7",
+      "rule": "Prototype-grade",
+      "detail": "Single-page artifact, no backend, no config system. Everything here should be buildable in one sitting per phase."
+    }
+  ],
+  "prior_art": [
+    {
+      "name": "allenai/fermi (RealFP + SynthFP)",
+      "url": "https://github.com/allenai/fermi",
+      "paper": "https://arxiv.org/abs/2110.14207",
+      "what_it_is": "867 real Fermi problems (train/val/test) + 10,000 templated ones. Solutions stored as programs: Q-nodes (sub-questions), F-facts, A-answers, P: final operation (Mul/Div/Add/Sub/Pow/Min/Log/Fac). Units via pint.",
+      "what_we_take": [
+        "Solution-as-program representation → our SolutionTree",
+        "fp_score metric",
+        "pint-style unit handling",
+        "Optional seed for science-flavoured problems"
+      ],
+      "caveats": [
+        "No LICENSE file in repo at time of inspection – cite the paper, verify terms before redistributing data",
+        "Problems skew physics/trivia, not business/interview"
+      ],
+      "verified": "Cloned and inspected 2026-10-01 (record format, eval_utils.accuracy_metric)"
+    },
+    {
+      "name": "LLM for Complex Reasoning: Fermi Problems study",
+      "url": "https://arxiv.org/html/2504.02671v1",
+      "what_we_take": [
+        "fp_score = max(0, 1 − |log10(estimate/truth)| / 3)",
+        "Finding: GPT-4 tops out ~0.5 fp_score – Fermi is hard even for models, so the model must not be the one producing reference answers"
+      ]
+    },
+    {
+      "name": "FermiEval – LLMs are overconfident",
+      "url": "https://arxiv.org/html/2510.26995",
+      "what_we_take": [
+        "Interval mode with Winkler score",
+        "Calibration tracking: nominal 99% intervals covered truth only ~65% → the overconfidence pattern we want to train out of players"
+      ]
+    },
+    {
+      "name": "Estimathon (Jane Street)",
+      "url": "https://estimathon.com/how-to-play",
+      "what_we_take": [
+        "Proven game mechanic: min/max intervals, missing intervals double your score, lowest score wins",
+        "Limited resubmissions as a tension mechanic"
+      ]
+    },
+    {
+      "name": "CheckEval",
+      "url": "https://arxiv.org/abs/2403.18771",
+      "what_we_take": [
+        "Decompose soft judgments into binary checklist questions",
+        "+0.45 average inter-evaluator agreement vs Likert, lower variance"
+      ]
+    },
+    {
+      "name": "Jev vs. LLMs as Rubric Judges",
+      "url": "https://arxiv.org/html/2609.29769v1",
+      "what_we_take": [
+        "Typed classifier matched flash-tier LLM judges in 19/27 comparisons, better on binary criteria",
+        "29–325× cheaper, 30–220× faster",
+        "Judges' errors are correlated → ensembles/cascades add little; validate against own human labels instead"
+      ]
+    },
+    {
+      "name": "Proper scoring rule for confidence intervals",
+      "url": "https://www.lesswrong.com/posts/sRfZxF2sjrRGdgyb8/a-proper-scoring-rule-for-confidence-intervals",
+      "what_we_take": [
+        "Background for interval scoring choice"
+      ]
+    },
+    {
+      "name": "Commercial AI case coaches (e.g. casegrade.io, soreno.ai)",
+      "urls": [
+        "https://casegrade.io/",
+        "https://soreno.ai/",
+        "https://www.hackingthecaseinterview.com/pages/best-ai-tools-case-interview-practice"
+      ],
+      "what_we_take": [
+        "Gap check: they appear to use holistic LLM rubric grading; no typed-tree + deterministic judge found → our differentiator"
+      ],
+      "verified": "Landing pages / roundup only, not product-tested"
+    }
+  ],
+  "resources": {
+    "method_sources": [
+      {
+        "name": "Hacking the Case Interview – guesstimates",
+        "url": "https://www.hackingthecaseinterview.com/pages/consulting-guesstimate-questions",
+        "use": "Evaluation priorities, 5-step framework, 7 mistakes"
+      },
+      {
+        "name": "IGotAnOffer – market sizing",
+        "url": "https://igotanoffer.com/blogs/mckinsey-case-interview-blog/market-sizing",
+        "use": "Archetypes, check-in step"
+      },
+      {
+        "name": "PrepLounge – market sizing",
+        "url": "https://www.preplounge.com/en/case-interview-basics/market-sizing",
+        "use": "What distinguishes excellent candidates"
+      },
+      {
+        "name": "LessWrong – Fermi estimates",
+        "url": "https://www.lesswrong.com/posts/PsEppdvgRisz5xAHG/fermi-estimates",
+        "use": "Bounding, geometric mean, triangulation, non-linearity"
+      },
+      {
+        "name": "The Aperiodical – approximate geometric mean",
+        "url": "https://aperiodical.com/2018/02/approaching-fermi-problems-with-the-approximate-geometric-mean/",
+        "use": "Bounds → midpoint technique"
+      }
+    ],
+    "truth_sources": [
+      {
+        "name": "BFS – Bundesamt für Statistik",
+        "url": "https://www.bfs.admin.ch/bfs/en/home/statistics/population/effectif-change.html",
+        "use": "Swiss population, households, businesses (STATENT) → verifiable answers"
+      },
+      {
+        "name": "Wikipedia – Demographics of Switzerland",
+        "url": "https://en.wikipedia.org/wiki/Demographics_of_Switzerland",
+        "use": "Population ~9.0M (2024), age split, life expectancy 83.8"
+      }
+    ],
+    "tech": [
+      {
+        "name": "pint",
+        "url": "https://pint.readthedocs.io/",
+        "use": "Reference for unit algebra; in-browser we use a tiny dimension-vector implementation instead"
+      },
+      {
+        "name": "Jev / TypeSafe typed classifier",
+        "url": "https://arxiv.org/html/2609.29769v1",
+        "use": "Preferred engine for ClassifierQuestions if an API is available"
+      }
+    ],
+    "internal": [
+      {
+        "name": "Fermi Problems: Interview Strategy Research (Claude Doc)",
+        "url": "https://claude.ai/code/artifact/9a539550-7ed5-4079-8169-0532239b719a"
+      }
+    ]
+  },
+  "game_loop": {
+    "phases": [
+      {
+        "id": "brief",
+        "de": "Aufgabe",
+        "seconds": 0,
+        "player_does": "Reads the problem; archetype hidden in ranked mode"
+      },
+      {
+        "id": "clarify",
+        "de": "Klären",
+        "seconds": 30,
+        "player_does": "Picks/writes up to 2 clarifying assumptions (scope, unit, time frame)"
+      },
+      {
+        "id": "structure",
+        "de": "Struktur",
+        "seconds": 90,
+        "player_does": "Builds the tree on the whiteboard: factor cards + operations, no values yet"
+      },
+      {
+        "id": "estimate",
+        "de": "Schätzen",
+        "seconds": 120,
+        "player_does": "Fills value, unit, reason per leaf; optional low/high per leaf"
+      },
+      {
+        "id": "check",
+        "de": "Prüfen",
+        "seconds": 60,
+        "player_does": "Second path or benchmark; names weakest assumption; writes so-what"
+      },
+      {
+        "id": "verdict",
+        "de": "Urteil",
+        "seconds": 0,
+        "player_does": "Sees scorecard, truth, per-slot feedback, badges"
+      }
+    ],
+    "timer_rule": "Phases are soft – overtime is allowed but recorded and reduces the speed component only."
+  },
+  "modes": [
+    {
+      "id": "training",
+      "de": "Training",
+      "ranked": false,
+      "description": "Archetype visible, hints on, reference slots revealed after verdict."
+    },
+    {
+      "id": "daily",
+      "de": "Tagesschätzung",
+      "ranked": true,
+      "description": "One shared problem per day, full judge, streak counter."
+    },
+    {
+      "id": "interval",
+      "de": "Intervall-Runde",
+      "ranked": true,
+      "description": "Estimathon-style: 8 problems in 20 min, only min/max per problem, 3 resubmissions. Pure code scoring."
+    },
+    {
+      "id": "challenge",
+      "de": "Gegenfrage",
+      "ranked": false,
+      "description": "Phase 2: after verdict, interviewer pushes on the weakest slot; player revises one value and defends it. Judged by checklist only."
+    }
+  ],
+  "schemas": {
+    "Dimension": {
+      "description": "Unit as exponent vector over base dimensions. Enables deterministic unit checking without a units library.",
+      "type": "object",
+      "properties": {
+        "person": "int",
+        "item": "int",
+        "time": "int",
+        "money": "int",
+        "length": "int",
+        "mass": "int",
+        "event": "int"
+      },
+      "examples": {
+        "people": {
+          "person": 1
+        },
+        "cups_per_person_per_day": {
+          "item": 1,
+          "person": -1,
+          "time": -1
+        },
+        "chf_per_year": {
+          "money": 1,
+          "time": -1
+        }
+      }
+    },
+    "Unit": {
+      "type": "object",
+      "required": [
+        "symbol",
+        "dimension",
+        "to_base"
+      ],
+      "properties": {
+        "symbol": "string (e.g. 'Pers.', 'Tassen/Pers./Tag', 'CHF/Jahr')",
+        "dimension": "Dimension",
+        "to_base": "number (factor to base unit, e.g. 'pro Woche' → time base day = 1/7)"
+      }
+    },
+    "Problem": {
+      "type": "object",
+      "required": [
+        "id",
+        "prompt_de",
+        "archetype",
+        "answer_unit",
+        "truth",
+        "reference_trees",
+        "difficulty"
+      ],
+      "properties": {
+        "id": "string (slug)",
+        "prompt_de": "string",
+        "archetype": "enum: recurring_consumption | durable_goods | service_supply | physical_capacity | single_site_revenue | b2b_market",
+        "region": "enum: CH | Basel | Zurich | EU | World",
+        "answer_unit": "Unit",
+        "truth": "Truth",
+        "reference_trees": "SolutionTree[] (1..n)",
+        "accepted_clarifications": "string[] (canonical scope assumptions, e.g. 'Stadt, nicht Agglomeration')",
+        "benchmarks": "Benchmark[] (known numbers a good sanity check could cite)",
+        "difficulty": "int 1..5",
+        "ranked_eligible": "bool (false unless truth.status = verified|derived)"
+      }
+    },
+    "Truth": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "value": "number | null",
+        "unit": "Unit",
+        "status": "enum: verified | derived | to_verify",
+        "source_url": "string",
+        "derivation": "string (only for status=derived: formula from verified inputs)",
+        "as_of": "date"
+      }
+    },
+    "Slot": {
+      "description": "A named, expected factor in a reference tree. This is what player cards get mapped onto.",
+      "type": "object",
+      "required": [
+        "id",
+        "label_de",
+        "dimension",
+        "plausible_log10_range"
+      ],
+      "properties": {
+        "id": "string (e.g. 'pop', 'share_consumers', 'freq')",
+        "label_de": "string",
+        "aliases_de": "string[] (helps the mapping classifier and allows exact-match shortcut)",
+        "dimension": "Dimension",
+        "plausible_log10_range": "[number, number] (e.g. population of Basel: [5.1, 5.4])",
+        "point_reference": "number (centre value used for per-slot bias tracking)",
+        "segmentable": "bool (does splitting this slot into segments show insight?)"
+      }
+    },
+    "SolutionTree": {
+      "description": "Typed program, inspired by allenai/fermi. Nodes are either leaves (estimated factors) or operations.",
+      "type": "object",
+      "required": [
+        "id",
+        "root"
+      ],
+      "properties": {
+        "id": "string",
+        "approach": "enum: top_down | bottom_up | dimensional | stock_flow",
+        "root": "Node"
+      }
+    },
+    "Node": {
+      "oneOf": [
+        {
+          "kind": "leaf",
+          "properties": {
+            "id": "string",
+            "label": "string (player's own words)",
+            "value": "number",
+            "low": "number | null",
+            "high": "number | null",
+            "unit": "Unit",
+            "reason": "string (one sentence)",
+            "slot_id": "string | null (filled by mapping stage, never by player)"
+          }
+        },
+        {
+          "kind": "op",
+          "properties": {
+            "id": "string",
+            "op": "enum: mul | div | add | sub | segment_sum",
+            "children": "Node[] (≥2)",
+            "segment_labels": "string[] (only for segment_sum, e.g. ['Studierende','Berufstätige','Rentner'])"
+          }
+        }
+      ]
+    },
+    "Attempt": {
+      "description": "Everything the player submits. The whiteboard is just an editor for this object.",
+      "type": "object",
+      "required": [
+        "problem_id",
+        "mode",
+        "tree",
+        "final_value",
+        "timings"
+      ],
+      "properties": {
+        "problem_id": "string",
+        "mode": "enum (see modes)",
+        "clarifications": "string[]",
+        "tree": "SolutionTree (player's)",
+        "final_value": "number (computed by code from tree – player cannot type it)",
+        "final_low": "number | null",
+        "final_high": "number | null",
+        "confidence_pct": "enum: 50 | 80 | 90",
+        "second_path": "SolutionTree | null",
+        "benchmark_note": "string | null",
+        "weakest_slot_node_id": "string | null",
+        "so_what": "string | null",
+        "timings": "{ phase_id: seconds }"
+      }
+    },
+    "ClassifierQuestion": {
+      "description": "The ONLY interface to a model. Fixed options in, distribution out.",
+      "type": "object",
+      "required": [
+        "id",
+        "template_de",
+        "options",
+        "threshold"
+      ],
+      "properties": {
+        "id": "string",
+        "template_de": "string with {placeholders}",
+        "options": "string[] (closed set, always includes an escape option like 'keine' / 'unklar')",
+        "threshold": "number (min top-option probability to accept, default 0.7)"
+      },
+      "returns": "{ distribution: { option: probability }, top: option, accepted: bool }"
+    },
+    "ScoreCard": {
+      "type": "object",
+      "properties": {
+        "components": "{ component_id: number 0..1 | null }  (null = deferred/unsicher)",
+        "total": "number 0..100",
+        "xp": "int",
+        "badges": "string[]",
+        "per_slot": "[{ slot_id, player_value, reference, log10_ratio, in_range }]",
+        "feedback_de": "string[] (template sentences filled by code, not generated)",
+        "deferred_items": "string[]"
+      }
+    },
+    "PlayerProfile": {
+      "storage": "localStorage, wrapped in try/catch",
+      "type": "object",
+      "properties": {
+        "xp": "int",
+        "level": "string",
+        "streak_days": "int",
+        "rating_by_archetype": "{ archetype: Elo number, start 1000 }",
+        "slot_bias": "{ slot_id: { n, mean_log10_ratio } }",
+        "calibration": "{ '50'|'80'|'90': { n, hits } }",
+        "history": "Attempt-summary[] (last 200)"
+      }
+    }
+  },
+  "judge_pipeline": {
+    "overview": "Three layers. L1 and the aggregation are pure functions. L2/L3 call the classifier only for closed questions. The same Attempt always yields the same ScoreCard given the same classifier outputs (cache by hash).",
+    "stages": [
+      {
+        "id": "L0_validate",
+        "engine": "code",
+        "checks": [
+          "Tree well-formed",
+          "Every leaf has value, unit, reason",
+          "Final unit dimension equals problem.answer_unit dimension"
+        ],
+        "on_fail": "Return to whiteboard with highlighted node; no score."
+      },
+      {
+        "id": "L1_deterministic",
+        "engine": "code",
+        "components": [
+          {
+            "id": "accuracy",
+            "formula": "fp = max(0, 1 − |log10(final_value / truth)| / 3)",
+            "source": "Kalyan et al. 2021",
+            "only_if": "truth.status in [verified, derived]"
+          },
+          {
+            "id": "unit_consistency",
+            "formula": "1 if dimension algebra of every op is valid (add/sub/segment_sum need equal dims), else 0"
+          },
+          {
+            "id": "precision_hygiene",
+            "formula": "share of leaf values with ≤2 significant figures"
+          },
+          {
+            "id": "rounding_balance",
+            "formula": "1 − |Σ sign(round_dir_i)| / n_leaves, where round_dir compares value to nearest 'raw' input the player typed before rounding (only if raw captured)",
+            "optional": true
+          },
+          {
+            "id": "triangulation",
+            "formula": "if second_path: max(0, 1 − |log10(v1/v2)| / 1) else 0",
+            "note": "Within ~1 order of magnitude counts; agreement within 2× ≈ 0.7"
+          },
+          {
+            "id": "calibration_interval",
+            "formula": "Winkler: (U − L) + (2/α)·max(0, L − y, y − U), computed in log10 space, mapped to 0..1 vs problem-specific baseline",
+            "source": "FermiEval",
+            "only_if": "final_low and final_high set"
+          },
+          {
+            "id": "speed",
+            "formula": "min(1, budget_seconds / used_seconds)"
+          }
+        ]
+      },
+      {
+        "id": "L2_slot_mapping",
+        "engine": "exact alias match first, classifier second",
+        "steps": [
+          "For each player leaf: if label normalised ∈ slot.aliases_de of any reference tree → map deterministically.",
+          "Else ask Q_MAP_SLOT with options = all slot labels of the best-matching reference tree + 'keiner davon'.",
+          "Pick reference tree with maximum mapped-slot overlap (Jaccard). Ties → fewer unmapped leaves."
+        ],
+        "components": [
+          {
+            "id": "structure_coverage",
+            "formula": "|mapped required slots| / |required slots| of chosen tree",
+            "fallback": "If best Jaccard < 0.3 → tree is 'eigener Ansatz': coverage = null (deferred), unit_consistency and triangulation carry structure weight"
+          },
+          {
+            "id": "assumption_plausibility",
+            "formula": "mean over mapped leaves of: 1 if log10(value) ∈ slot.plausible_log10_range else max(0, 1 − distance_to_range / 1)"
+          },
+          {
+            "id": "segmentation",
+            "formula": "1 if a segment_sum node sits on a slot with segmentable=true, else 0"
+          }
+        ]
+      },
+      {
+        "id": "L3_checklist",
+        "engine": "classifier (Jev-style), binary or closed-set only",
+        "components": [
+          {
+            "id": "justification_rate",
+            "formula": "share of leaves where Q_REASON = 'begründet'"
+          },
+          {
+            "id": "clarification",
+            "formula": "|distinct accepted Q_CLARIFY options except 'keine'| / 3"
+          },
+          {
+            "id": "sanity_check",
+            "formula": "1 if second_path present OR Q_BENCHMARK = 'ja'"
+          },
+          {
+            "id": "weakest_named",
+            "formula": "1 if weakest_slot_node_id set AND that node has the widest low/high log-span OR largest |log10 ratio| vs reference (code-checked, not model-checked)"
+          },
+          {
+            "id": "so_what",
+            "formula": "1 if Q_SO_WHAT = 'verknüpft Zahl mit Entscheidung'"
+          }
+        ]
+      },
+      {
+        "id": "L4_aggregate",
+        "engine": "code",
+        "weights": {
+          "structure_coverage": 0.2,
+          "assumption_plausibility": 0.15,
+          "justification_rate": 0.1,
+          "unit_consistency": 0.1,
+          "accuracy": 0.15,
+          "sanity_check": 0.08,
+          "triangulation": 0.05,
+          "clarification": 0.05,
+          "so_what": 0.05,
+          "precision_hygiene": 0.03,
+          "speed": 0.04
+        },
+        "weights_rationale": "Mirrors interviewer priorities: structure and assumptions above the final number (Hacking the Case Interview ranking). Accuracy deliberately ≤15%.",
+        "null_handling": "Deferred components are dropped and remaining weights renormalised; card shows 'unsicher' list.",
+        "total": "round(100 · Σ w_i · c_i / Σ w_i over non-null)"
+      }
+    ],
+    "determinism_guarantees": [
+      "Classifier outputs cached by sha256(question_id + normalised input); replays never re-call.",
+      "Temperature-free engine preferred (typed classifier). If an LLM is used as fallback: constrained to output exactly one option token; distribution approximated by 5 samples or logprobs.",
+      "Feedback text is template-filled by code from component values – no free generation in the verdict."
+    ],
+    "validation_plan": "Hand-label 30 attempts; run all three tiers on the same attempts; report agreement (Cohen's κ) per question. Tells how much AI adds over pure code."
+  },
+  "classifier_questions": [
+    {
+      "id": "Q_MAP_SLOT",
+      "template_de": "Problem: {prompt}. Der Spieler nennt den Faktor «{label}» ({unit}). Welchem Referenzfaktor entspricht er?",
+      "options": [
+        "{slot_labels…}",
+        "keiner davon"
+      ],
+      "threshold": 0.7,
+      "no_ai_input": "Player tags each leaf with a reference slot – list revealed only in the 'Prüfen' phase, after the tree is built with own labels"
+    },
+    {
+      "id": "Q_REASON",
+      "template_de": "Faktor «{label}» = {value} {unit}. Begründung: «{reason}». Ist das eine inhaltliche Begründung für die Grössenordnung?",
+      "options": [
+        "begründet",
+        "nur wiederholt / leer",
+        "unklar"
+      ],
+      "threshold": 0.7,
+      "no_ai_input": "Reason type (Statistik/Erfahrung/Analogie/Schranke) + text ≥ 10 chars"
+    },
+    {
+      "id": "Q_CLARIFY",
+      "template_de": "Klärungsfrage: «{text}». Was klärt sie?",
+      "options": [
+        "Umfang/Geografie",
+        "Einheit/Messgrösse",
+        "Zeitraum",
+        "keine"
+      ],
+      "threshold": 0.7,
+      "note": "Asked once per clarification; distinct accepted options are counted.",
+      "no_ai_input": "Chips Umfang/Einheit/Zeitraum, each counts only with text ≥ 5 chars"
+    },
+    {
+      "id": "Q_BENCHMARK",
+      "template_de": "Plausibilitätsnotiz: «{benchmark_note}». Vergleicht sie das Ergebnis mit einer unabhängigen bekannten Grösse?",
+      "options": [
+        "ja",
+        "nein",
+        "unklar"
+      ],
+      "threshold": 0.7,
+      "no_ai_input": "Pick a benchmark from the problem + note ≥ 10 chars, or build a second path"
+    },
+    {
+      "id": "Q_SO_WHAT",
+      "template_de": "Problem: {prompt}. Schlussaussage: «{so_what}». Was tut diese Aussage?",
+      "options": [
+        "verknüpft Zahl mit Entscheidung",
+        "wiederholt nur die Zahl",
+        "leer/anderes"
+      ],
+      "threshold": 0.7,
+      "no_ai_input": "Sentence frame 'Das heisst: ___, weil ___', both blanks ≥ 10 chars"
+    }
+  ],
+  "standout_signals": {
+    "description": "What separates good from excellent candidates (PrepLounge, Hacking the Case Interview, LessWrong) – each made checkable and turned into a badge.",
+    "badges": [
+      {
+        "id": "zwei_wege",
+        "de": "Zwei Wege",
+        "rule": "triangulation ≥ 0.7",
+        "signal": "Solves top-down and bottom-up, paths agree"
+      },
+      {
+        "id": "segmentierer",
+        "de": "Segmentierer",
+        "rule": "segmentation = 1 on a segmentable slot",
+        "signal": "Splits population where one average would lie"
+      },
+      {
+        "id": "realist",
+        "de": "Realist",
+        "rule": "sanity_check = 1 AND accuracy ≥ 0.8",
+        "signal": "Checks against a benchmark and lands close"
+      },
+      {
+        "id": "selbstkritik",
+        "de": "Selbstkritik",
+        "rule": "weakest_named = 1",
+        "signal": "Names the assumption most likely wrong – and it really is"
+      },
+      {
+        "id": "kalibriert",
+        "de": "Kalibriert",
+        "rule": "Over last 20 interval answers at 90%: hit rate 80–95%",
+        "signal": "Ranges are honest, not overconfident"
+      },
+      {
+        "id": "so_what",
+        "de": "So what?",
+        "rule": "so_what = 1 in 5 consecutive attempts",
+        "signal": "Translates the number into a decision"
+      },
+      {
+        "id": "archetyp_meister",
+        "de": "Archetyp-Meister: {archetype}",
+        "rule": "rating_by_archetype ≥ 1300",
+        "signal": "Recognises and executes a question type reliably"
+      }
+    ],
+    "baseline_not_rewarded": [
+      "Having any structure",
+      "Round numbers",
+      "Getting an answer at all"
+    ]
+  },
+  "pattern_learning": {
+    "description": "Typed data makes personal patterns measurable instead of 'felt'.",
+    "metrics": [
+      {
+        "id": "slot_bias",
+        "formula": "per slot: running mean of log10(player_value / slot.point_reference)",
+        "feedback_template_de": "Du schätzt «{slot}» im Schnitt {factor}× zu {hoch|tief}.",
+        "min_n": 3
+      },
+      {
+        "id": "calibration_curve",
+        "formula": "per confidence level: hits / n where truth ∈ [low, high]",
+        "feedback_template_de": "Deine 90%-Intervalle treffen nur {rate}% – mach sie breiter."
+      },
+      {
+        "id": "archetype_rating",
+        "formula": "Elo vs problem difficulty: expected = 1/(1+10^((D−R)/400)), D = 800 + 150·difficulty, outcome = total/100, K = 32"
+      },
+      {
+        "id": "phase_time_profile",
+        "formula": "median seconds per phase over last 10",
+        "feedback_template_de": "Du springst nach {s}s in die Zahlen – nimm dir 60s für die Struktur."
+      },
+      {
+        "id": "recurring_mistakes",
+        "formula": "counts of: unit_consistency=0, precision_hygiene<0.5, sanity_check=0, clarification=0",
+        "feedback_template_de": "Häufigster Fehler: {mistake}"
+      }
+    ]
+  },
+  "progression": {
+    "xp": "xp = total (0..100) + 10 per badge + 5 streak bonus",
+    "levels": [
+      {
+        "min_xp": 0,
+        "de": "Praktikant"
+      },
+      {
+        "min_xp": 500,
+        "de": "Analyst"
+      },
+      {
+        "min_xp": 1500,
+        "de": "Associate"
+      },
+      {
+        "min_xp": 3500,
+        "de": "Manager"
+      },
+      {
+        "min_xp": 7000,
+        "de": "Partner"
+      }
+    ],
+    "streak": "Daily mode attempt submitted on consecutive calendar days (local time)."
+  },
+  "problem_bank": {
+    "target_size_mvp": 30,
+    "mix": "5 per archetype, difficulty 1–4, ≥ 20 ranked_eligible",
+    "authoring_rule": "Claude may draft prompts, slots and reference trees; truth values only from a fetched source or a derivation from one. Model-estimated truths are forbidden (models score ~0.5 fp themselves).",
+    "samples": [
+      {
+        "id": "geburtstage-ch-heute",
+        "prompt_de": "Wie viele Menschen in der Schweiz haben heute Geburtstag?",
+        "archetype": "recurring_consumption",
+        "region": "CH",
+        "answer_unit": {
+          "symbol": "Pers./Tag",
+          "dimension": {
+            "person": 1,
+            "time": -1
+          },
+          "to_base": 1
+        },
+        "truth": {
+          "value": 24600,
+          "status": "derived",
+          "derivation": "9,000,000 residents / 365 days (uniform birthdays assumption)",
+          "source_url": "https://en.wikipedia.org/wiki/Demographics_of_Switzerland",
+          "as_of": "2024"
+        },
+        "reference_trees": [
+          {
+            "id": "t1",
+            "approach": "top_down",
+            "root": {
+              "kind": "op",
+              "op": "div",
+              "children": [
+                {
+                  "kind": "leaf",
+                  "slot": {
+                    "id": "pop",
+                    "label_de": "Bevölkerung Schweiz",
+                    "aliases_de": [
+                      "einwohner schweiz",
+                      "bevölkerung",
+                      "population"
+                    ],
+                    "dimension": {
+                      "person": 1
+                    },
+                    "plausible_log10_range": [
+                      6.9,
+                      7.0
+                    ],
+                    "point_reference": 9000000,
+                    "segmentable": false
+                  }
+                },
+                {
+                  "kind": "leaf",
+                  "slot": {
+                    "id": "days",
+                    "label_de": "Tage pro Jahr",
+                    "aliases_de": [
+                      "tage",
+                      "tage pro jahr"
+                    ],
+                    "dimension": {
+                      "time": 1
+                    },
+                    "plausible_log10_range": [
+                      2.55,
+                      2.57
+                    ],
+                    "point_reference": 365,
+                    "segmentable": false
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "difficulty": 1,
+        "ranked_eligible": true,
+        "purpose": "Tutorial problem – teaches the whiteboard, unit check and so-what."
+      },
+      {
+        "id": "coiffeure-zuerich",
+        "prompt_de": "Wie viele Coiffeusen und Coiffeure arbeiten in der Stadt Zürich?",
+        "archetype": "service_supply",
+        "region": "Zurich",
+        "answer_unit": {
+          "symbol": "Pers.",
+          "dimension": {
+            "person": 1
+          },
+          "to_base": 1
+        },
+        "truth": {
+          "value": null,
+          "status": "to_verify",
+          "source_url": "BFS STATENT (NOGA 96.02) or Stadt Zürich Statistik – to fetch"
+        },
+        "reference_trees": [
+          {
+            "id": "t1_demand_over_capacity",
+            "approach": "bottom_up",
+            "root": {
+              "kind": "op",
+              "op": "div",
+              "children": [
+                {
+                  "kind": "op",
+                  "op": "mul",
+                  "children": [
+                    {
+                      "kind": "leaf",
+                      "slot": {
+                        "id": "pop",
+                        "label_de": "Einwohner Stadt Zürich",
+                        "aliases_de": [
+                          "einwohner zürich",
+                          "bevölkerung zürich"
+                        ],
+                        "dimension": {
+                          "person": 1
+                        },
+                        "plausible_log10_range": [
+                          5.5,
+                          5.8
+                        ],
+                        "point_reference": 430000,
+                        "segmentable": true
+                      }
+                    },
+                    {
+                      "kind": "leaf",
+                      "slot": {
+                        "id": "cuts_per_person_year",
+                        "label_de": "Haarschnitte pro Person und Jahr",
+                        "aliases_de": [
+                          "haarschnitte pro jahr",
+                          "coiffeurbesuche"
+                        ],
+                        "dimension": {
+                          "event": 1,
+                          "person": -1,
+                          "time": -1
+                        },
+                        "plausible_log10_range": [
+                          0.6,
+                          1.2
+                        ],
+                        "point_reference": 8,
+                        "segmentable": true
+                      }
+                    }
+                  ]
+                },
+                {
+                  "kind": "op",
+                  "op": "mul",
+                  "children": [
+                    {
+                      "kind": "leaf",
+                      "slot": {
+                        "id": "cuts_per_day",
+                        "label_de": "Kunden pro Coiffeur und Tag",
+                        "aliases_de": [
+                          "kunden pro tag",
+                          "haarschnitte pro tag"
+                        ],
+                        "dimension": {
+                          "event": 1,
+                          "person": -1,
+                          "time": -1
+                        },
+                        "plausible_log10_range": [
+                          0.7,
+                          1.2
+                        ],
+                        "point_reference": 10,
+                        "segmentable": false
+                      }
+                    },
+                    {
+                      "kind": "leaf",
+                      "slot": {
+                        "id": "workdays",
+                        "label_de": "Arbeitstage pro Jahr",
+                        "aliases_de": [
+                          "arbeitstage"
+                        ],
+                        "dimension": {
+                          "time": 1
+                        },
+                        "plausible_log10_range": [
+                          2.3,
+                          2.42
+                        ],
+                        "point_reference": 230,
+                        "segmentable": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "benchmarks": [
+          {
+            "de": "ca. 1 Salon pro wenige hundert Einwohner in dichten Städten",
+            "status": "to_verify"
+          }
+        ],
+        "difficulty": 2,
+        "ranked_eligible": false,
+        "purpose": "Shows a to_verify problem: playable in training, not ranked until truth is fetched."
+      }
+    ]
+  },
+  "architecture": {
+    "delivery": "Plain ES modules (no dependencies) + build script that inlines everything into dist/fermi-arena.html (single file, works offline and as a Claude Artifact).",
+    "modules": [
+      {
+        "file": "src/units.js",
+        "role": "Unit catalog as dimension vectors, base time = day"
+      },
+      {
+        "file": "src/tree.js",
+        "role": "Solution tree, evaluation, edit helpers"
+      },
+      {
+        "file": "data/problems.js",
+        "role": "Problem bank with truth status, slots, reference trees (slot sets), benchmarks"
+      },
+      {
+        "file": "src/judge.js",
+        "role": "L0–L4 pure functions, weights, feedback templates, badges"
+      },
+      {
+        "file": "src/tiers.js",
+        "role": "Signals per tier; closed questions; caching"
+      },
+      {
+        "file": "src/profile.js",
+        "role": "XP, levels, streak, Elo per tier+archetype, slot bias, calibration"
+      },
+      {
+        "file": "src/app.js",
+        "role": "UI (deliberately plain)"
+      }
+    ],
+    "classifier_adapters_in_priority": [
+      {
+        "id": "noai",
+        "file": "src/tiers.js#noAiSignals"
+      },
+      {
+        "id": "local",
+        "file": "src/tiers.js#ollamaAsk"
+      },
+      {
+        "id": "frontier",
+        "file": "src/tiers.js#anthropicAsk"
+      }
+    ]
+  },
+  "build_plan": [
+    {
+      "phase": 1,
+      "name": "No-AI game",
+      "status": "done (starter)",
+      "deliverable": "Full loop, judge, profile, 6 problems (2 ranked)"
+    },
+    {
+      "phase": 2,
+      "name": "Problem bank to 30",
+      "status": "next",
+      "deliverable": "≥ 20 ranked problems with fetched truths (BFS etc.)"
+    },
+    {
+      "phase": 3,
+      "name": "Local + frontier tiers live",
+      "status": "code present, untested",
+      "deliverable": "Run against Ollama/Qwen and Claude; fix prompts"
+    },
+    {
+      "phase": 4,
+      "name": "Comparison study",
+      "deliverable": "30 hand-labelled attempts, κ per question per tier"
+    },
+    {
+      "phase": 5,
+      "name": "Game layer extras",
+      "deliverable": "Interval round (Estimathon), challenge mode, daily share"
+    },
+    {
+      "phase": 6,
+      "name": "Style",
+      "deliverable": "Visual design pass"
+    }
+  ],
+  "how_this_was_built": {
+    "summary": "Concept assembled in one Cowork session on 2026-10-01 from web research, one cloned repository and the preceding strategy doc.",
+    "steps": [
+      "Researched interview Fermi strategy (Hacking the Case Interview, IGotAnOffer, LessWrong, The Aperiodical) → Claude Doc 'Fermi Problems: Interview Strategy Research'.",
+      "Searched for prior art on Fermi datasets, scoring and LLM judging; read FermiEval, the 2025 Fermi LLM study, CheckEval and the Jev-vs-LLM judge paper.",
+      "Cloned github.com/allenai/fermi and inspected record format (question/program/answer/context), the eval_utils accuracy metric and dataset sizes (realFP 867 across splits as shipped; README says 928). Noted missing LICENSE file.",
+      "Checked Estimathon rules on estimathon.com for the interval mechanic.",
+      "Derived the design: computable components in code, soft judgments as fixed-option classifier questions, Likert removed, truth gating, multi-tree references.",
+      "Wrote schemas, pipeline formulas, classifier catalog, badges, pattern metrics, two sample problems (one ranked via derived truth, one marked to_verify).",
+      "v0.2: added three tiers on one interface; built the starter repo (ES modules, no deps), wrote 10 tests, built the single-file version and ran the tutorial loop headless in Chromium."
+    ],
+    "not_verified": [
+      "Commercial tools' internal scoring (only marketing pages/roundup)",
+      "Jev API availability and pricing for this project",
+      "Zurich hairdresser truth value",
+      "Weights in L4 are a reasoned starting point, not empirically fitted"
+    ]
+  },
+  "open_questions": [
+    "Does the hosted page reach your Ollama, or only the local dev build?",
+    "Which Claude model ID for the frontier tier (set in Einstellungen)?",
+    "Business-only problem bank, or also physics-style problems from allenai/fermi?",
+    "Spoken think-aloud in v2?"
+  ],
+  "tiers": {
+    "principle": "One judge, three ways to answer the five closed questions. Numbers are always scored by code. Ratings are kept separately per tier.",
+    "noai": {
+      "de": "Ohne KI",
+      "how": "Every closed question becomes a constrained player input; nothing is classified.",
+      "status": "implemented",
+      "inputs": {
+        "Q_MAP_SLOT": "Player tags each leaf with a reference slot – list revealed only in the 'Prüfen' phase, after the tree is built with own labels",
+        "Q_REASON": "Reason type (Statistik/Erfahrung/Analogie/Schranke) + text ≥ 10 chars",
+        "Q_CLARIFY": "Chips Umfang/Einheit/Zeitraum, each counts only with text ≥ 5 chars",
+        "Q_BENCHMARK": "Pick a benchmark from the problem + note ≥ 10 chars, or build a second path",
+        "Q_SO_WHAT": "Sentence frame 'Das heisst: ___, weil ___', both blanks ≥ 10 chars"
+      },
+      "known_weakness": "Self-tagging is gameable and recognition is easier than recall – acceptable for solo training; ranked separately."
+    },
+    "local": {
+      "de": "Lokal (Ollama)",
+      "how": "Qwen (or any Ollama model) answers the closed questions via structured output: JSON schema with enum of allowed options, temperature 0.",
+      "status": "implemented, untested against a live Ollama",
+      "requirements": [
+        "Ollama running with OLLAMA_ORIGINS=* (or the page's origin)",
+        "Browser may block https→http://localhost (Private Network Access) – run the local build via 'npm run dev' if so"
+      ]
+    },
+    "frontier": {
+      "de": "Frontier (Claude API)",
+      "how": "Anthropic Messages API from the browser (anthropic-dangerous-direct-browser-access header), forced to answer JSON with one option; parsed and validated against the option list.",
+      "status": "implemented, untested; personal-use only (key in localStorage)",
+      "later": [
+        "Interviewer pushback mode",
+        "Think-aloud transcript checklist",
+        "Jev typed classifier as alternative engine if API access exists"
+      ]
+    },
+    "comparison_study": "Hand-label 30 attempts; run all three tiers on the same attempts; report agreement (Cohen's κ) per question. Tells how much AI adds over pure code."
+  },
+  "implementation_notes": {
+    "simplifications_vs_concept": [
+      "Reference trees are stored as slot sets + a display formula, not full typed trees – coverage only needs the set",
+      "Interval is entered once for the final answer (90%), not per leaf",
+      "Calibration is shown and tracked but not part of the weighted total (badge 'Kalibriert' instead)",
+      "Unit errors don't block submission; they score unit_consistency = 0 and accuracy = 0",
+      "Classifier distribution approximated by a single temperature-0 answer; no threshold yet"
+    ],
+    "tested": [
+      "10 node tests (fpScore matches allenai accuracy_metric, Winkler, units, determinism, deferral, weakest-assumption check, profile)",
+      "Headless browser run of the full tutorial loop on the built single file: score 90, no console errors"
+    ]
+  }
+}

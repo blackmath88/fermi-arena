@@ -1,0 +1,1063 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fermi-Arena</title>
+<style>
+:root { --bg:#f7f7f5; --fg:#1d1d1f; --mute:#6b6b70; --line:#dcdcd8; --card:#fff; --acc:#2f5bea; --ok:#1a8a4a; --bad:#c0392b; }
+@media (prefers-color-scheme: dark) { :root { --bg:#141416; --fg:#ececee; --mute:#9a9aa2; --line:#2e2e33; --card:#1d1d21; --acc:#7b9bff; --ok:#4cc38a; --bad:#ff7a6b; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, sans-serif; }
+header { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--line); }
+header .meta { color:var(--mute); font-size:13px; }
+main { max-width:860px; margin:0 auto; padding:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin:0 0 12px; }
+.hero { text-align:center; } .score { font-size:56px; font-weight:700; }
+.q { font-size:18px; font-weight:600; } .sub, .hint { color:var(--mute); font-size:13px; }
+button { font:inherit; padding:7px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+button.primary { background:var(--acc); border-color:var(--acc); color:#fff; } button.link { border:0; background:none; padding:4px; }
+button:disabled { opacity:.6; }
+input[type=text], input[type=password], select { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--fg); width:100%; margin:3px 0; }
+.list { list-style:none; padding:0; margin:0; } .row { width:100%; text-align:left; display:flex; flex-direction:column; gap:4px; margin:0 0 8px; }
+.tags i { font-style:normal; font-size:12px; color:var(--mute); border:1px solid var(--line); border-radius:99px; padding:1px 8px; margin-right:4px; }
+.tags i.ok { color:var(--ok); border-color:var(--ok); }
+.steps { display:flex; gap:6px; list-style:none; padding:0; margin:0 0 8px; flex-wrap:wrap; }
+.steps li { font-size:13px; padding:3px 10px; border-radius:99px; border:1px solid var(--line); color:var(--mute); }
+.steps li.on { border-color:var(--acc); color:var(--acc); font-weight:600; } .steps li.done { color:var(--ok); }
+.timer { font-size:13px; color:var(--mute); margin-bottom:10px; }
+.board { overflow-x:auto; }
+.op { border:1px dashed var(--line); border-radius:10px; padding:8px; margin:4px 0; }
+.op > select { width:auto; } .kids { display:flex; flex-direction:column; gap:2px; }
+.sym { text-align:center; font-weight:700; color:var(--acc); }
+.leaf { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px; }
+.lrow { display:flex; gap:6px; } .lrow > * { flex:1; min-width:0; }
+.lbtn { display:flex; gap:6px; margin-top:4px; } .lbtn button { font-size:12px; padding:3px 8px; }
+.live { margin:12px 0; padding:10px; border-radius:8px; background:var(--card); border:1px solid var(--line); } .live:empty { display:none; }
+.ok { color:var(--ok); } .bad { color:var(--bad); }
+.err { color:var(--bad); margin:8px 0; }
+.actions { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; }
+.clar, .tag { margin:6px 0; } .tag { display:flex; gap:8px; align-items:center; } .tag span { flex:1; }
+.sowhat input { display:inline-block; width:auto; min-width:40%; }
+.bar { display:grid; grid-template-columns:150px 1fr 90px; gap:8px; align-items:center; font-size:13px; margin:4px 0; }
+.track { height:8px; background:var(--line); border-radius:99px; overflow:hidden; } .fill { height:100%; background:var(--acc); }
+table { width:100%; border-collapse:collapse; font-size:13px; } td, th { text-align:left; padding:4px; border-bottom:1px solid var(--line); }
+.badges span, .pill { display:inline-block; margin:6px 4px 0; padding:2px 10px; border-radius:99px; background:var(--acc); color:#fff; font-size:13px; }
+.radio { display:block; margin:4px 0; }
+.toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--fg); color:var(--bg); padding:8px 14px; border-radius:8px; }
+@media (max-width:560px) { .bar { grid-template-columns:100px 1fr 70px; } .lrow { flex-direction:column; gap:0; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+// ---- src/units.js ----
+// Einheiten als Dimensions-Vektoren. Basis: Zeit = Tag.
+// Deterministische Einheitenprüfung ohne Bibliothek.
+
+const DIMS = ['person', 'item', 'event', 'time', 'money', 'volume'];
+
+// key -> { de, dim, toBase }  (toBase: Faktor in Basiseinheit)
+const UNITS = {
+  zahl:           { de: 'Zahl (ohne Einheit)',      dim: {},                                   toBase: 1 },
+  anteil:         { de: 'Anteil (0–1)',             dim: {},                                   toBase: 1 },
+  pers:           { de: 'Personen',                 dim: { person: 1 },                        toBase: 1 },
+  stk:            { de: 'Stück',                    dim: { item: 1 },                          toBase: 1 },
+  ereig:          { de: 'Ereignisse',               dim: { event: 1 },                         toBase: 1 },
+  chf:            { de: 'CHF',                      dim: { money: 1 },                         toBase: 1 },
+  tag:            { de: 'Tage',                     dim: { time: 1 },                          toBase: 1 },
+  jahr:           { de: 'Jahre',                    dim: { time: 1 },                          toBase: 365 },
+  tage_pro_jahr:  { de: 'Tage pro Jahr (Anteil)',   dim: {},                                   toBase: 1 / 365 },
+  m3:             { de: 'm³',                       dim: { volume: 1 },                        toBase: 1 },
+  m3_stk:         { de: 'm³ pro Stück',             dim: { volume: 1, item: -1 },              toBase: 1 },
+  stk_pers:       { de: 'Stück pro Person',         dim: { item: 1, person: -1 },              toBase: 1 },
+  stk_pers_tag:   { de: 'Stück pro Person und Tag', dim: { item: 1, person: -1, time: -1 },    toBase: 1 },
+  stk_pers_jahr:  { de: 'Stück pro Person und Jahr',dim: { item: 1, person: -1, time: -1 },    toBase: 1 / 365 },
+  ereig_pers_tag: { de: 'Ereignisse pro Person und Tag',  dim: { event: 1, person: -1, time: -1 }, toBase: 1 },
+  ereig_pers_jahr:{ de: 'Ereignisse pro Person und Jahr', dim: { event: 1, person: -1, time: -1 }, toBase: 1 / 365 },
+  stk_tag:        { de: 'Stück pro Tag',            dim: { item: 1, time: -1 },                toBase: 1 },
+  stk_jahr:       { de: 'Stück pro Jahr',           dim: { item: 1, time: -1 },                toBase: 1 / 365 },
+  pers_tag:       { de: 'Personen pro Tag',         dim: { person: 1, time: -1 },              toBase: 1 },
+  chf_stk:        { de: 'CHF pro Stück',            dim: { money: 1, item: -1 },               toBase: 1 },
+  chf_jahr:       { de: 'CHF pro Jahr',             dim: { money: 1, time: -1 },               toBase: 1 / 365 },
+};
+
+function dimOf(key) {
+  const u = UNITS[key];
+  if (!u) throw new Error(`Unbekannte Einheit: ${key}`);
+  return normalize(u.dim);
+}
+
+function normalize(dim) {
+  const out = {};
+  for (const d of DIMS) if (dim[d]) out[d] = dim[d];
+  return out;
+}
+
+function mulDim(a, b, sign = 1) {
+  const out = {};
+  for (const d of DIMS) {
+    const v = (a[d] || 0) + sign * (b[d] || 0);
+    if (v) out[d] = v;
+  }
+  return out;
+}
+
+function sameDim(a, b) {
+  return DIMS.every(d => (a[d] || 0) === (b[d] || 0));
+}
+
+function dimLabel(dim) {
+  const up = [], down = [];
+  for (const d of DIMS) {
+    const v = dim[d] || 0;
+    const s = d + (Math.abs(v) > 1 ? '^' + Math.abs(v) : '');
+    if (v > 0) up.push(s); else if (v < 0) down.push(s);
+  }
+  return (up.join('·') || '1') + (down.length ? ' / ' + down.join('·') : '');
+}
+
+const toBase = (value, key) => value * UNITS[key].toBase;
+const fromBase = (value, key) => value / UNITS[key].toBase;
+
+// ---- src/tree.js ----
+// Lösungsbaum: Blätter (geschätzte Faktoren) und Operationen.
+// leaf: { kind:'leaf', id, label, value, unit, reasonType, reason, slot }
+// op:   { kind:'op', id, op:'mul'|'div'|'add'|'sub'|'segment_sum', children:[...] , segments?:[] }
+
+
+let counter = 0;
+const newId = () => 'n' + Date.now().toString(36) + (counter++).toString(36);
+
+const newLeaf = () => ({ kind: 'leaf', id: newId(), label: '', value: null, unit: 'zahl', reasonType: '', reason: '', slot: '' });
+const newOp = (op = 'mul', children) => ({ kind: 'op', id: newId(), op, children: children || [newLeaf(), newLeaf()] });
+
+const OPS = {
+  mul: { de: '× multiplizieren', sym: '×' },
+  div: { de: '÷ dividieren', sym: '÷' },
+  add: { de: '+ addieren', sym: '+' },
+  sub: { de: '− subtrahieren', sym: '−' },
+  segment_sum: { de: 'Σ Segmente summieren', sym: 'Σ' },
+};
+
+// Wertet den Baum aus. Gibt { value (Basis), dim, errors[] } zurück.
+function evaluate(node) {
+  const errors = [];
+  const res = walk(node, errors);
+  return { value: res.value, dim: res.dim, errors };
+}
+
+function walk(node, errors) {
+  if (node.kind === 'leaf') {
+    if (!(typeof node.value === 'number' && isFinite(node.value))) {
+      errors.push({ id: node.id, msg: `«${node.label || 'Faktor'}» hat keinen Wert` });
+      return { value: NaN, dim: dimOf(node.unit) };
+    }
+    return { value: toBase(node.value, node.unit), dim: dimOf(node.unit) };
+  }
+  const kids = node.children.map(c => walk(c, errors));
+  if (kids.length < 2) errors.push({ id: node.id, msg: 'Eine Operation braucht mindestens zwei Elemente' });
+  const [first, ...rest] = kids;
+  let value = first.value, dim = first.dim;
+  for (const k of rest) {
+    switch (node.op) {
+      case 'mul': value *= k.value; dim = mulDim(dim, k.dim, 1); break;
+      case 'div': value /= k.value; dim = mulDim(dim, k.dim, -1); break;
+      case 'add': case 'segment_sum': case 'sub':
+        if (!sameDim(dim, k.dim)) errors.push({ id: node.id, msg: `Einheiten passen nicht zusammen bei ${OPS[node.op].sym}`, unit: true });
+        value = node.op === 'sub' ? value - k.value : value + k.value;
+        break;
+    }
+  }
+  return { value, dim };
+}
+
+function leaves(node, out = []) {
+  if (!node) return out;
+  if (node.kind === 'leaf') out.push(node);
+  else node.children.forEach(c => leaves(c, out));
+  return out;
+}
+
+function ops(node, out = []) {
+  if (!node || node.kind === 'leaf') return out;
+  out.push(node);
+  node.children.forEach(c => ops(c, out));
+  return out;
+}
+
+function findParent(root, id, parent = null) {
+  if (root.id === id) return parent;
+  if (root.kind === 'op') for (const c of root.children) {
+    const p = findParent(c, id, root);
+    if (p !== undefined) return p;
+  }
+  return undefined;
+}
+
+// Ersetzt Knoten mit id durch replacement (immutabel genug für einen Prototyp: in-place)
+function replaceNode(root, id, replacement) {
+  if (root.id === id) return replacement;
+  const parent = findParent(root, id);
+  if (parent) parent.children = parent.children.map(c => (c.id === id ? replacement : c));
+  return root;
+}
+
+function removeNode(root, id) {
+  const parent = findParent(root, id);
+  if (!parent) return root;
+  parent.children = parent.children.filter(c => c.id !== id);
+  if (parent.children.length === 1) return replaceNode(root, parent.id, parent.children[0]);
+  return root;
+}
+
+// ---- data/problems.js ----
+// Aufgabenbank. Regel: truth.value nur aus zitierter Quelle oder deterministisch daraus abgeleitet.
+// truth.status: 'verified' | 'derived' | 'to_verify' | 'none'  → nur verified/derived sind rangliste-fähig.
+// Slots: erwartete Faktoren. range = plausibler Bereich als log10 in der Slot-Einheit.
+
+const WIKI_CH = 'https://en.wikipedia.org/wiki/Demographics_of_Switzerland';
+
+const PROBLEMS = [
+  {
+    id: 'geburtstage-ch-heute',
+    prompt: 'Wie viele Menschen in der Schweiz haben heute Geburtstag?',
+    archetype: 'recurring_consumption',
+    difficulty: 1,
+    answerUnit: 'pers_tag',
+    truth: { value: 24607, status: 'derived', source: WIKI_CH, asOf: '2024-10',
+      derivation: '8 981 565 Einwohner (Okt. 2024) ÷ 365 Tage, Geburtstage gleichverteilt' },
+    slots: [
+      { id: 'pop', de: 'Bevölkerung Schweiz', unit: 'pers', range: [6.9, 7.0], ref: 9e6, segmentable: false },
+      { id: 'days', de: 'Tage im Jahr', unit: 'tag', range: [2.55, 2.57], ref: 365, segmentable: false },
+    ],
+    trees: [
+      { id: 't1', approach: 'top_down', slots: ['pop', 'days'], formula: 'Bevölkerung ÷ Tage im Jahr' },
+    ],
+    benchmarks: [
+      { id: 'b1', de: 'Geburten pro Jahr in der Schweiz liegen bei rund 80 000 – Geburtstage sind viel häufiger, weil jede lebende Person einen hat.' },
+    ],
+    tutorial: true,
+  },
+  {
+    id: 'rentner-ch',
+    prompt: 'Wie viele Menschen in der Schweiz sind 65 Jahre oder älter?',
+    archetype: 'recurring_consumption',
+    difficulty: 1,
+    answerUnit: 'pers',
+    truth: { value: 1647219, status: 'derived', source: WIKI_CH, asOf: '2024',
+      derivation: '8 981 565 × 18,34 % (Altersstruktur 65+)' },
+    slots: [
+      { id: 'pop', de: 'Bevölkerung Schweiz', unit: 'pers', range: [6.9, 7.0], ref: 9e6, segmentable: false },
+      { id: 'share65', de: 'Anteil 65+', unit: 'anteil', range: [-0.85, -0.6], ref: 0.18, segmentable: false },
+      { id: 'lifeexp', de: 'Lebenserwartung', unit: 'jahr', range: [1.88, 1.95], ref: 84, segmentable: false },
+      { id: 'years65', de: 'Jahre ab 65 bis Lebensende', unit: 'jahr', range: [1.2, 1.35], ref: 19, segmentable: false },
+    ],
+    trees: [
+      { id: 't1', approach: 'top_down', slots: ['pop', 'share65'], formula: 'Bevölkerung × Anteil 65+' },
+      { id: 't2', approach: 'stock_flow', slots: ['pop', 'lifeexp', 'years65'], formula: 'Bevölkerung ÷ Lebenserwartung × Jahre ab 65 (Gleichverteilung)' },
+    ],
+    benchmarks: [
+      { id: 'b1', de: 'Bei gleichmässiger Altersverteilung entfällt auf jeden Jahrgang ca. 1/84 der Bevölkerung.' },
+    ],
+  },
+  {
+    id: 'kaffee-basel',
+    prompt: 'Wie viele Tassen Kaffee werden in der Stadt Basel pro Tag getrunken?',
+    archetype: 'recurring_consumption',
+    difficulty: 2,
+    answerUnit: 'stk_tag',
+    truth: { value: null, status: 'to_verify', source: 'Kaffeekonsum pro Kopf CH (z. B. Branchenverband Kaffee) + Bevölkerung Basel-Stadt' },
+    slots: [
+      { id: 'pop', de: 'Bevölkerung Basel', unit: 'pers', range: [5.2, 5.4], ref: 2e5, segmentable: true },
+      { id: 'share_drinkers', de: 'Anteil Kaffeetrinkende', unit: 'anteil', range: [-0.3, -0.05], ref: 0.7, segmentable: false },
+      { id: 'cups', de: 'Tassen pro Person und Tag', unit: 'stk_pers_tag', range: [0.2, 0.6], ref: 2.5, segmentable: true },
+      { id: 'commuters', de: 'Pendler/Besucher', unit: 'pers', range: [4.6, 5.2], ref: 8e4, segmentable: false },
+    ],
+    trees: [
+      { id: 't1', approach: 'top_down', slots: ['pop', 'share_drinkers', 'cups'], formula: 'Bevölkerung × Anteil Trinkende × Tassen pro Tag' },
+      { id: 't2', approach: 'top_down', slots: ['pop', 'commuters', 'share_drinkers', 'cups'], formula: '(Bevölkerung + Pendler) × Anteil × Tassen' },
+    ],
+    benchmarks: [
+      { id: 'b1', de: 'Die Schweiz gehört weltweit zu den Ländern mit dem höchsten Kaffeekonsum pro Kopf (mehrere Tassen pro Trinker und Tag).' },
+    ],
+  },
+  {
+    id: 'coiffeure-zuerich',
+    prompt: 'Wie viele Coiffeusen und Coiffeure arbeiten in der Stadt Zürich?',
+    archetype: 'service_supply',
+    difficulty: 2,
+    answerUnit: 'pers',
+    truth: { value: null, status: 'to_verify', source: 'BFS STATENT (NOGA 96.02) oder Statistik Stadt Zürich' },
+    slots: [
+      { id: 'pop', de: 'Bevölkerung Zürich', unit: 'pers', range: [5.55, 5.75], ref: 4.3e5, segmentable: true },
+      { id: 'cuts', de: 'Haarschnitte pro Person und Jahr', unit: 'ereig_pers_jahr', range: [0.5, 1.2], ref: 8, segmentable: true },
+      { id: 'capacity', de: 'Kunden pro Coiffeur und Tag', unit: 'ereig_pers_tag', range: [0.7, 1.2], ref: 10, segmentable: false },
+      { id: 'workdays', de: 'Arbeitstage pro Jahr', unit: 'tage_pro_jahr', range: [2.3, 2.42], ref: 230, segmentable: false },
+    ],
+    trees: [
+      { id: 't1', approach: 'bottom_up', slots: ['pop', 'cuts', 'capacity', 'workdays'], formula: 'Bevölkerung × Haarschnitte/Jahr ÷ (Kunden/Tag × Arbeitstage/Jahr)' },
+    ],
+    benchmarks: [
+      { id: 'b1', de: 'In dichten Städten gibt es typischerweise einen Coiffeursalon pro wenige hundert Einwohner.' },
+    ],
+  },
+  {
+    id: 'smartphones-ch',
+    prompt: 'Wie viele Smartphones werden in der Schweiz pro Jahr verkauft?',
+    archetype: 'durable_goods',
+    difficulty: 3,
+    answerUnit: 'stk_jahr',
+    truth: { value: null, status: 'to_verify', source: 'Marktstudien (z. B. GfK/Comparis) – zu recherchieren' },
+    slots: [
+      { id: 'pop', de: 'Bevölkerung Schweiz', unit: 'pers', range: [6.9, 7.0], ref: 9e6, segmentable: true },
+      { id: 'owners', de: 'Smartphones pro Person', unit: 'stk_pers', range: [-0.15, 0.1], ref: 0.95, segmentable: true },
+      { id: 'lifetime', de: 'Nutzungsdauer', unit: 'jahr', range: [0.3, 0.6], ref: 3, segmentable: false },
+    ],
+    trees: [
+      { id: 't1', approach: 'stock_flow', slots: ['pop', 'owners', 'lifetime'], formula: 'Bevölkerung × Geräte pro Person ÷ Nutzungsdauer' },
+    ],
+    benchmarks: [
+      { id: 'b1', de: 'Ersatzzyklus von Smartphones liegt typischerweise bei 2–3 Jahren.' },
+    ],
+  },
+  {
+    id: 'pingpong-tram',
+    prompt: 'Wie viele Tischtennisbälle passen in ein Basler Tram?',
+    archetype: 'physical_capacity',
+    difficulty: 3,
+    answerUnit: 'stk',
+    truth: { value: null, status: 'none', source: 'Hypothetisch – nur Training' },
+    slots: [
+      { id: 'tram_volume', de: 'Innenvolumen Tram', unit: 'm3', range: [2.0, 2.5], ref: 150, segmentable: false },
+      { id: 'ball_volume', de: 'Volumen pro Ball', unit: 'm3_stk', range: [-4.6, -4.4], ref: 3.4e-5, segmentable: false },
+      { id: 'packing', de: 'Packungsdichte', unit: 'anteil', range: [-0.25, -0.15], ref: 0.64, segmentable: false },
+    ],
+    trees: [
+      { id: 't1', approach: 'dimensional', slots: ['tram_volume', 'ball_volume', 'packing'], formula: 'Innenvolumen ÷ Ballvolumen × Packungsdichte' },
+    ],
+    benchmarks: [
+      { id: 'b1', de: 'Zufällig geschüttete Kugeln füllen etwa 64 % eines Raums.' },
+    ],
+  },
+];
+
+const ARCHETYPES = {
+  recurring_consumption: 'Wiederkehrender Konsum',
+  durable_goods: 'Langlebige Güter',
+  service_supply: 'Dienstleistungsangebot',
+  physical_capacity: 'Physische Kapazität',
+  single_site_revenue: 'Umsatz eines Standorts',
+  b2b_market: 'B2B-Markt',
+};
+
+// ---- src/judge.js ----
+// Richter: reine Funktionen. Gleicher Versuch + gleiche Signale → gleiche Bewertung.
+// Signale (signals) kommen aus der gewählten Stufe (tiers.js): ohne KI, lokal, Frontier.
+
+
+const WEIGHTS = {
+  structure_coverage: 0.20,
+  assumption_plausibility: 0.15,
+  accuracy: 0.15,
+  justification_rate: 0.10,
+  unit_consistency: 0.10,
+  sanity_check: 0.08,
+  triangulation: 0.05,
+  clarification: 0.05,
+  so_what: 0.05,
+  speed: 0.04,
+  precision_hygiene: 0.03,
+};
+
+const LABELS = {
+  structure_coverage: 'Struktur',
+  assumption_plausibility: 'Annahmen plausibel',
+  accuracy: 'Treffsicherheit',
+  justification_rate: 'Begründungen',
+  unit_consistency: 'Einheiten',
+  sanity_check: 'Plausibilitätscheck',
+  triangulation: 'Zweiter Weg',
+  clarification: 'Klärung',
+  so_what: 'So what?',
+  speed: 'Tempo',
+  precision_hygiene: 'Runden',
+  calibration: 'Intervall (90 %)',
+};
+
+const TIME_BUDGET_S = 300;
+const ALPHA = 0.1; // 90 %-Intervall
+
+// Kalibrierungs-Score: Winkler-Score im log10-Raum, auf 0..1 abgebildet.
+function winklerLog(low, high, truth, alpha = ALPHA) {
+  const L = Math.log10(low), U = Math.log10(high), y = Math.log10(truth);
+  return (U - L) + (2 / alpha) * Math.max(0, L - y, y - U);
+}
+
+// fp_score nach Kalyan et al. 2021 (allenai/fermi, eval_utils.accuracy_metric)
+function fpScore(estimate, truth) {
+  if (!(estimate > 0) || !(truth > 0)) return 0;
+  return Math.max(0, 3 - Math.abs(Math.log10(estimate / truth))) / 3;
+}
+
+function sigFigsOk(v) {
+  if (!isFinite(v) || v === 0) return true;
+  return Number(v.toPrecision(2)) === v;
+}
+
+const clamp01 = x => Math.max(0, Math.min(1, x));
+
+function validate(attempt) {
+  const errs = [];
+  for (const l of leaves(attempt.tree)) {
+    if (!l.label.trim()) errs.push('Jeder Faktor braucht eine Bezeichnung.');
+    if (!(l.value > 0)) errs.push(`«${l.label || 'Faktor'}»: Wert muss grösser als 0 sein.`);
+  }
+  if (attempt.low != null || attempt.high != null) {
+    if (!(attempt.low > 0 && attempt.high > attempt.low)) errs.push('Intervall: Untergrenze < Obergrenze, beide > 0.');
+  }
+  return [...new Set(errs)];
+}
+
+function judge(attempt, problem, signals) {
+  const comp = {};
+  const notes = [];
+  const ev = evaluate(attempt.tree);
+  const ansDim = dimOf(problem.answerUnit);
+  const dimOk = sameDim(ev.dim, ansDim);
+  const innerUnitErr = ev.errors.some(e => e.unit);
+  const finalValue = fromBase(ev.value, problem.answerUnit); // in Antwort-Einheit
+
+  // L1 – deterministisch
+  comp.unit_consistency = dimOk && !innerUnitErr ? 1 : 0;
+  if (!dimOk) notes.push(`Die Einheit deines Ergebnisses passt nicht zu «${UNITS[problem.answerUnit].de}».`);
+  if (innerUnitErr) notes.push('Du addierst Grössen mit verschiedenen Einheiten.');
+
+  const truth = problem.truth;
+  const ranked = truth.status === 'verified' || truth.status === 'derived';
+  comp.accuracy = ranked ? (dimOk ? fpScore(finalValue, truth.value) : 0) : null;
+
+  const ls = leaves(attempt.tree);
+  comp.precision_hygiene = ls.length ? ls.filter(l => sigFigsOk(l.value)).length / ls.length : 0;
+  if (comp.precision_hygiene < 1) notes.push('Runde stärker: höchstens 2 signifikante Stellen pro Annahme.');
+
+  let secondValue = null;
+  if (attempt.second) {
+    const ev2 = evaluate(attempt.second);
+    if (sameDim(ev2.dim, ansDim) && ev2.value > 0 && ev.value > 0) {
+      secondValue = fromBase(ev2.value, problem.answerUnit);
+      comp.triangulation = clamp01(1 - Math.abs(Math.log10(ev.value / ev2.value)));
+    } else comp.triangulation = 0;
+  } else comp.triangulation = 0;
+
+  const secs = attempt.totalSeconds || 0;
+  comp.speed = secs > 0 ? Math.min(1, TIME_BUDGET_S / secs) : 1;
+
+  let calibration = null, hit = null;
+  if (attempt.low > 0 && attempt.high > attempt.low && ranked) {
+    const w = winklerLog(attempt.low, attempt.high, truth.value);
+    calibration = clamp01(1 - w / 3);
+    hit = truth.value >= attempt.low && truth.value <= attempt.high;
+  }
+
+  // L2 – Slot-Zuordnung (Signale) + deterministische Prüfung
+  const slotById = Object.fromEntries(problem.slots.map(s => [s.id, s]));
+  const tagged = ls.map(l => ({ leaf: l, slot: slotById[signals.slotOf(l.id)] })).filter(t => t.slot);
+  const S = new Set(tagged.map(t => t.slot.id));
+  let best = null;
+  for (const t of problem.trees) {
+    const T = new Set(t.slots);
+    const inter = [...S].filter(x => T.has(x)).length;
+    const jac = inter / new Set([...S, ...T]).size;
+    if (!best || jac > best.jac) best = { tree: t, jac, inter, size: T.size };
+  }
+  if (best && best.jac >= 0.3) comp.structure_coverage = best.inter / best.size;
+  else { comp.structure_coverage = null; notes.push('Eigener Ansatz erkannt – Struktur wird über Einheiten und Gegenrechnung bewertet.'); }
+
+  const perSlot = tagged.map(({ leaf, slot }) => {
+    const leafDim = dimOf(leaf.unit), slotDim = dimOf(slot.unit);
+    if (!sameDim(leafDim, slotDim)) return { leafId: leaf.id, slot: slot.id, score: 0, ratio: null };
+    const inSlotUnit = fromBase(toBase(leaf.value, leaf.unit), slot.unit);
+    const x = Math.log10(inSlotUnit);
+    const dist = x < slot.range[0] ? slot.range[0] - x : x > slot.range[1] ? x - slot.range[1] : 0;
+    return { leafId: leaf.id, slot: slot.id, score: clamp01(1 - dist), ratio: x - Math.log10(slot.ref), value: inSlotUnit };
+  });
+  comp.assumption_plausibility = perSlot.length ? perSlot.reduce((a, p) => a + p.score, 0) / perSlot.length : null;
+  for (const p of perSlot) if (p.score < 1 && p.ratio != null)
+    notes.push(`«${slotById[p.slot].de}»: ${fmt(p.value)} liegt ausserhalb des plausiblen Bereichs (${fmt(10 ** slotById[p.slot].range[0])}–${fmt(10 ** slotById[p.slot].range[1])}).`);
+
+  const segSlots = problem.slots.filter(s => s.segmentable).map(s => s.id);
+  const segmented = ops(attempt.tree).some(o => o.op === 'segment_sum' &&
+    leaves(o).some(l => segSlots.includes(signals.slotOf(l.id))));
+
+  // L3 – Checkliste (Signale)
+  const reasons = ls.map(l => signals.reasonOk(l.id));
+  const knownReasons = reasons.filter(r => r !== null);
+  comp.justification_rate = knownReasons.length ? knownReasons.filter(Boolean).length / knownReasons.length : null;
+  comp.clarification = signals.clarifyKinds().size / 3;
+  const bench = signals.benchmarkOk();
+  comp.sanity_check = attempt.second || bench ? 1 : bench === null ? null : 0;
+  const sw = signals.soWhatOk();
+  comp.so_what = sw === null ? null : sw ? 1 : 0;
+
+  let weakestOk = null;
+  const withRatio = perSlot.filter(p => p.ratio != null);
+  if (attempt.weakestId && withRatio.length >= 2) {
+    const max = Math.max(...withRatio.map(p => Math.abs(p.ratio)));
+    const chosen = withRatio.find(p => p.leafId === attempt.weakestId);
+    weakestOk = !!chosen && Math.abs(chosen.ratio) >= max - 0.1;
+  }
+
+  // L4 – Aggregation
+  let sw2 = 0, sum = 0;
+  const deferred = [];
+  for (const [k, w] of Object.entries(WEIGHTS)) {
+    if (comp[k] == null) { deferred.push(k); continue; }
+    sw2 += w; sum += w * comp[k];
+  }
+  const total = sw2 ? Math.round(100 * sum / sw2) : 0;
+
+  const badges = [];
+  if (comp.triangulation >= 0.7) badges.push('zwei_wege');
+  if (segmented) badges.push('segmentierer');
+  if (comp.sanity_check === 1 && comp.accuracy != null && comp.accuracy >= 0.8) badges.push('realist');
+  if (weakestOk) badges.push('selbstkritik');
+
+  if (!comp.clarification) notes.push('Starte mit einer Klärungsfrage (Umfang, Einheit oder Zeitraum).');
+  if (comp.sanity_check === 0) notes.push('Kein Plausibilitätscheck: rechne einen zweiten Weg oder vergleiche mit einer Referenz.');
+  if (comp.so_what === 0) notes.push('Schliesse mit dem «So what?»: Was bedeutet die Zahl für die Entscheidung?');
+  if (weakestOk === false) notes.push('Deine schwächste Annahme war eine andere – vergleiche die Abweichungen unten.');
+
+  return {
+    total, components: comp, deferred, notes, badges,
+    finalValue, secondValue, dimOk, calibration, hit,
+    bestTree: best && best.tree, perSlot, weakestOk, segmented,
+    truth: ranked ? truth.value : null,
+  };
+}
+
+function fmt(v) {
+  if (v == null || !isFinite(v)) return '–';
+  const a = Math.abs(v);
+  if (a >= 1e9) return (v / 1e9).toLocaleString('de-CH', { maximumSignificantDigits: 3 }) + ' Mrd.';
+  if (a >= 1e6) return (v / 1e6).toLocaleString('de-CH', { maximumSignificantDigits: 3 }) + ' Mio.';
+  return v.toLocaleString('de-CH', { maximumSignificantDigits: 3 });
+}
+
+// ---- src/tiers.js ----
+// Drei Stufen, eine Schnittstelle: buildSignals(attempt, problem) → Signale für den Richter.
+// Modelle beantworten nur geschlossene Fragen (feste Optionen). Unsicher/Fehler → null (= zurückgestellt).
+
+
+const minLen = (s, n) => (s || '').trim().length >= n;
+
+// ---------- Stufe 0: ohne KI ----------
+function noAiSignals(attempt) {
+  const byId = Object.fromEntries(leaves(attempt.tree).map(l => [l.id, l]));
+  return {
+    slotOf: id => byId[id]?.slot || '',
+    reasonOk: id => !!(byId[id]?.reasonType && minLen(byId[id].reason, 10)),
+    clarifyKinds: () => new Set(attempt.clarifications.filter(c => minLen(c.text, 5)).map(c => c.type)),
+    benchmarkOk: () => !!(attempt.benchmarkId && minLen(attempt.benchmarkNote, 10)),
+    soWhatOk: () => minLen(attempt.soWhat.what, 10) && minLen(attempt.soWhat.why, 10),
+  };
+}
+
+// ---------- Geschlossene Fragen (für lokal + Frontier) ----------
+const QUESTIONS = {
+  MAP_SLOT: (p, l) => ({
+    text: `Aufgabe: ${p.prompt}\nDer Spieler nennt den Faktor «${l.label}» (${UNITS[l.unit].de}). Welchem Referenzfaktor entspricht er?`,
+    options: [...p.slots.map(s => s.id), 'keiner'],
+    labels: Object.fromEntries(p.slots.map(s => [s.id, s.de])),
+  }),
+  REASON: (p, l) => ({
+    text: `Faktor «${l.label}» = ${l.value} ${UNITS[l.unit].de}. Begründung: «${l.reason}». Ist das eine inhaltliche Begründung für die Grössenordnung?`,
+    options: ['begruendet', 'leer_oder_wiederholt', 'unklar'],
+  }),
+  CLARIFY: (p, text) => ({
+    text: `Aufgabe: ${p.prompt}\nKlärungsfrage des Spielers: «${text}». Was klärt sie?`,
+    options: ['scope', 'unit', 'time', 'keine'],
+  }),
+  BENCHMARK: (p, note) => ({
+    text: `Aufgabe: ${p.prompt}\nPlausibilitätsnotiz: «${note}». Vergleicht sie das Ergebnis mit einer unabhängigen bekannten Grösse?`,
+    options: ['ja', 'nein', 'unklar'],
+  }),
+  SO_WHAT: (p, s) => ({
+    text: `Aufgabe: ${p.prompt}\nSchlussaussage: «Das heisst: ${s.what}, weil ${s.why}». Was tut diese Aussage?`,
+    options: ['verknuepft_mit_entscheidung', 'wiederholt_zahl', 'anderes'],
+  }),
+};
+
+// Gemeinsamer Ablauf für Modell-Stufen. ask(q) → Promise<option|null>
+async function modelSignals(attempt, problem, ask) {
+  const ls = leaves(attempt.tree);
+  const slot = {}, reason = {};
+  for (const l of ls) {
+    const s = await ask(QUESTIONS.MAP_SLOT(problem, l));
+    slot[l.id] = s && s !== 'keiner' ? s : '';
+    reason[l.id] = minLen(l.reason, 1) ? mapOpt(await ask(QUESTIONS.REASON(problem, l)), { begruendet: true, leer_oder_wiederholt: false }) : false;
+  }
+  const kinds = new Set();
+  for (const c of attempt.clarifications.filter(c => minLen(c.text, 5))) {
+    const k = await ask(QUESTIONS.CLARIFY(problem, c.text));
+    if (k && k !== 'keine') kinds.add(k);
+  }
+  const bench = minLen(attempt.benchmarkNote, 5) ? mapOpt(await ask(QUESTIONS.BENCHMARK(problem, attempt.benchmarkNote)), { ja: true, nein: false }) : false;
+  const sw = minLen(attempt.soWhat.what, 3) ? mapOpt(await ask(QUESTIONS.SO_WHAT(problem, attempt.soWhat)), { verknuepft_mit_entscheidung: true, wiederholt_zahl: false, anderes: false }) : false;
+  return {
+    slotOf: id => slot[id] || '',
+    reasonOk: id => reason[id] ?? null,
+    clarifyKinds: () => kinds,
+    benchmarkOk: () => bench,
+    soWhatOk: () => sw,
+  };
+}
+const mapOpt = (opt, m) => (opt != null && opt in m ? m[opt] : null);
+
+// Cache: gleiche Frage → gleiche Antwort (Replays rufen kein Modell erneut auf)
+function cached(engine, fn) {
+  return async q => {
+    const key = 'fa_cache_' + engine + '_' + hash(q.text + '|' + q.options.join(','));
+    try { const hit = localStorage.getItem(key); if (hit) return hit === '∅' ? null : hit; } catch {}
+    let ans = null;
+    try { ans = await fn(q); } catch (e) { console.warn('Klassifikator-Fehler', e); }
+    if (!q.options.includes(ans)) ans = null;
+    try { localStorage.setItem(key, ans ?? '∅'); } catch {}
+    return ans;
+  };
+}
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); }
+
+const SYSTEM = 'Du bist ein Klassifikator. Antworte ausschliesslich mit JSON {"answer": "<option>"} und wähle genau eine der erlaubten Optionen. Keine Erklärung.';
+const prompt = q => `${q.text}\n\nErlaubte Optionen: ${q.options.map(o => q.labels?.[o] ? `${o} (${q.labels[o]})` : o).join(', ')}`;
+
+// ---------- Stufe 1: lokal (Ollama, z. B. Qwen) ----------
+// Strukturierte Ausgabe via JSON-Schema mit enum → Modell kann nur erlaubte Optionen liefern.
+function ollamaAsk(cfg) {
+  return cached('ollama_' + cfg.model, async q => {
+    const r = await fetch(cfg.url.replace(/\/$/, '') + '/api/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: cfg.model, stream: false, options: { temperature: 0 },
+        format: { type: 'object', properties: { answer: { type: 'string', enum: q.options } }, required: ['answer'] },
+        messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt(q) }],
+      }),
+    });
+    const j = await r.json();
+    return JSON.parse(j.message.content).answer;
+  });
+}
+
+// ---------- Stufe 2: Frontier (Anthropic Messages API, direkt aus dem Browser) ----------
+// Nur für den persönlichen Prototyp: API-Key liegt im localStorage dieses Browsers.
+function anthropicAsk(cfg) {
+  return cached('anthropic_' + cfg.model, async q => {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json', 'x-api-key': cfg.key,
+        'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: cfg.model, max_tokens: 50, temperature: 0, system: SYSTEM,
+        messages: [{ role: 'user', content: prompt(q) }],
+      }),
+    });
+    const j = await r.json();
+    const txt = j.content?.[0]?.text || '';
+    return JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1)).answer;
+  });
+}
+
+const TIERS = {
+  noai: { de: 'Ohne KI', selfTag: true, ranked: true },
+  local: { de: 'Lokal (Ollama)', selfTag: false, ranked: true, experimental: true },
+  frontier: { de: 'Frontier (Claude API)', selfTag: false, ranked: true, experimental: true },
+};
+
+async function buildSignals(tier, attempt, problem, settings) {
+  if (tier === 'local') return modelSignals(attempt, problem, ollamaAsk(settings.local));
+  if (tier === 'frontier') return modelSignals(attempt, problem, anthropicAsk(settings.frontier));
+  return noAiSignals(attempt);
+}
+
+// ---- src/profile.js ----
+// Spielerprofil: XP, Level, Streak, Elo je Archetyp und Stufe, Slot-Bias, Kalibrierung.
+
+const KEY = 'fermi_arena_profile_v1';
+
+const LEVELS = [
+  [0, 'Praktikant'], [500, 'Analyst'], [1500, 'Associate'], [3500, 'Manager'], [7000, 'Partner'],
+];
+
+const BADGES = {
+  zwei_wege: 'Zwei Wege',
+  segmentierer: 'Segmentierer',
+  realist: 'Realist',
+  selbstkritik: 'Selbstkritik',
+  kalibriert: 'Kalibriert',
+  so_what: 'So what?',
+};
+
+const emptyProfile = () => ({ xp: 0, streak: 0, lastDay: null, elo: {}, slotBias: {}, calib: { n: 0, hits: 0 }, soWhatRun: 0, badges: {}, history: [] });
+
+function loadProfile() {
+  try { return { ...emptyProfile(), ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return emptyProfile(); }
+}
+function saveProfile(p) { try { localStorage.setItem(KEY, JSON.stringify(p)); } catch {} }
+
+const levelOf = xp => LEVELS.filter(([min]) => xp >= min).pop()[1];
+
+function eloUpdate(r, difficulty, outcome, k = 32) {
+  const D = 800 + 150 * difficulty;
+  const expected = 1 / (1 + 10 ** ((D - r) / 400));
+  return Math.round(r + k * (outcome - expected));
+}
+
+const today = () => new Date().toLocaleDateString('sv-SE');
+
+// Wendet ein Ergebnis an. Reine Funktion auf einer Kopie, Rückgabe: { profile, gained, newBadges }
+function applyResult(profile, result, problem, tier) {
+  const p = structuredClone(profile);
+  const newBadges = [...result.badges];
+
+  for (const s of result.perSlot) if (s.ratio != null) {
+    const b = p.slotBias[s.slot] || { n: 0, mean: 0 };
+    b.mean = (b.mean * b.n + s.ratio) / (b.n + 1); b.n++;
+    p.slotBias[s.slot] = b;
+  }
+  if (result.hit != null) {
+    p.calib.n++; if (result.hit) p.calib.hits++;
+    const rate = p.calib.hits / p.calib.n;
+    if (p.calib.n >= 10 && rate >= 0.8 && rate <= 0.95) newBadges.push('kalibriert');
+  }
+  p.soWhatRun = result.components.so_what === 1 ? p.soWhatRun + 1 : 0;
+  if (p.soWhatRun >= 5) newBadges.push('so_what');
+
+  if (problem.truth.status === 'verified' || problem.truth.status === 'derived') {
+    const key = tier + ':' + problem.archetype;
+    p.elo[key] = eloUpdate(p.elo[key] ?? 1000, problem.difficulty, result.total / 100);
+  }
+
+  const d = today();
+  if (p.lastDay !== d) {
+    const y = new Date(Date.now() - 864e5).toLocaleDateString('sv-SE');
+    p.streak = p.lastDay === y ? p.streak + 1 : 1;
+    p.lastDay = d;
+  }
+  const unique = [...new Set(newBadges)];
+  for (const b of unique) p.badges[b] = (p.badges[b] || 0) + 1;
+  const gained = result.total + 10 * unique.length + (p.streak > 1 ? 5 : 0);
+  p.xp += gained;
+  p.history = [{ at: new Date().toISOString(), problem: problem.id, tier, total: result.total }, ...p.history].slice(0, 200);
+  return { profile: p, gained, newBadges: unique };
+}
+
+function biasNotes(profile, problems) {
+  const names = {};
+  for (const pr of problems) for (const s of pr.slots) names[s.id] = s.de;
+  return Object.entries(profile.slotBias).filter(([, b]) => b.n >= 3 && Math.abs(b.mean) >= 0.15)
+    .map(([id, b]) => `Du schätzt «${names[id] || id}» im Schnitt ${(10 ** Math.abs(b.mean)).toFixed(1)}× zu ${b.mean > 0 ? 'hoch' : 'tief'} (n=${b.n}).`);
+}
+
+// ---- src/app.js ----
+// UI – bewusst schlicht (Stil folgt später). Ein Zustand, eine render()-Funktion.
+
+
+const PHASES = [
+  { id: 'clarify', de: 'Klären', budget: 30 },
+  { id: 'structure', de: 'Struktur', budget: 90 },
+  { id: 'estimate', de: 'Schätzen', budget: 120 },
+  { id: 'check', de: 'Prüfen', budget: 60 },
+];
+const CLARIFY_TYPES = { scope: 'Umfang / Geografie', unit: 'Einheit / Messgrösse', time: 'Zeitraum' };
+const REASON_TYPES = { statistik: 'Statistik / bekannte Zahl', erfahrung: 'Eigene Erfahrung', analogie: 'Analogie', schranke: 'Ober-/Untergrenze' };
+const SETTINGS_KEY = 'fermi_arena_settings_v1';
+
+const S = {
+  view: 'home', profile: loadProfile(), settings: loadSettings(),
+  problem: null, phase: 0, attempt: null, phaseStart: 0, phaseTimes: {}, result: null, gain: null, busy: false, errors: [],
+};
+
+function loadSettings() {
+  const d = { tier: 'noai', local: { url: 'http://localhost:11434', model: 'qwen2.5:7b' }, frontier: { key: '', model: '' } };
+  try { return { ...d, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return d; }
+}
+function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(S.settings)); } catch {} }
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const $ = sel => document.querySelector(sel);
+const isRanked = p => p.truth.status === 'verified' || p.truth.status === 'derived';
+
+function parseNum(s) {
+  if (typeof s === 'number') return s;
+  let t = String(s || '').trim().toLowerCase().replace(/['’\s]/g, '').replace(',', '.');
+  let m = 1;
+  for (const [suf, f] of [['mrd', 1e9], ['mio', 1e6], ['k', 1e3], ['%', 0.01]]) if (t.endsWith(suf)) { m = f; t = t.slice(0, -suf.length); break; }
+  const v = Number(t);
+  return t === '' || !isFinite(v) ? null : v * m;
+}
+
+// ---------- Ablauf ----------
+function start(problem) {
+  S.problem = problem;
+  S.attempt = {
+    problemId: problem.id, tier: S.settings.tier,
+    clarifications: Object.keys(CLARIFY_TYPES).map(type => ({ type, on: false, text: '' })),
+    tree: newOp('mul'), second: null, low: null, high: null,
+    benchmarkId: '', benchmarkNote: '', weakestId: '', soWhat: { what: '', why: '' }, totalSeconds: 0,
+  };
+  S.phase = 0; S.phaseTimes = {}; S.phaseStart = Date.now(); S.result = null; S.errors = [];
+  S.view = 'play'; render();
+}
+
+function nextPhase() {
+  const ph = PHASES[S.phase];
+  S.phaseTimes[ph.id] = Math.round((Date.now() - S.phaseStart) / 1000);
+  S.phaseStart = Date.now();
+  if (S.phase < PHASES.length - 1) { S.phase++; S.errors = []; render(); return; }
+  submit();
+}
+
+async function submit() {
+  const a = S.attempt;
+  a.clarifications = a.clarifications.map(c => ({ ...c, text: c.on ? c.text : '' }));
+  a.totalSeconds = Object.values(S.phaseTimes).reduce((x, y) => x + y, 0);
+  S.errors = validate(a);
+  if (S.errors.length) { S.phase = 2; render(); return; }
+  S.busy = true; render();
+  try {
+    const signals = await buildSignals(S.settings.tier, a, S.problem, S.settings);
+    S.result = judge(a, S.problem, signals);
+    const { profile, gained, newBadges } = applyResult(S.profile, S.result, S.problem, S.settings.tier);
+    S.profile = profile; saveProfile(profile);
+    S.gain = { gained, newBadges };
+    S.view = 'verdict';
+  } catch (e) { S.errors = ['Bewertung fehlgeschlagen: ' + e.message]; }
+  S.busy = false; render();
+}
+
+// ---------- Rendering ----------
+function render() {
+  const app = $('#app');
+  app.innerHTML = header() + ({ home, play, verdict, profile: profileView, settings: settingsView }[S.view])();
+  if (S.view === 'play') updateLive();
+}
+
+function header() {
+  const p = S.profile;
+  return `<header><button class="link" data-act="home"><b>Fermi-Arena</b></button>
+    <span class="meta">${esc(levelOf(p.xp))} · ${p.xp} XP · 🔥 ${p.streak} · ${esc(TIERS[S.settings.tier].de)}</span>
+    <nav><button class="link" data-act="profile">Profil</button><button class="link" data-act="settings">Einstellungen</button></nav></header>`;
+}
+
+function home() {
+  const ranked = PROBLEMS.filter(isRanked);
+  const daySeed = Number(new Date().toLocaleDateString('sv-SE').replace(/-/g, ''));
+  const daily = ranked[daySeed % ranked.length];
+  return `<main>
+    <section class="card hero"><h2>Tagesschätzung</h2><p>${esc(daily.prompt)}</p>
+      <button class="primary" data-act="start" data-id="${daily.id}">Los geht's</button></section>
+    <section><h3>Alle Aufgaben</h3><ul class="list">${PROBLEMS.map(p => `
+      <li><button class="row" data-act="start" data-id="${p.id}">
+        <span>${esc(p.prompt)}</span>
+        <span class="tags"><i>${esc(ARCHETYPES[p.archetype])}</i><i>Stufe ${p.difficulty}</i>${isRanked(p) ? '<i class="ok">Rangliste</i>' : '<i>Training</i>'}${p.tutorial ? '<i>Tutorial</i>' : ''}</span>
+      </button></li>`).join('')}</ul></section></main>`;
+}
+
+function play() {
+  const p = S.problem, a = S.attempt, ph = PHASES[S.phase];
+  const steps = PHASES.map((x, i) => `<li class="${i === S.phase ? 'on' : i < S.phase ? 'done' : ''}">${x.de}</li>`).join('');
+  let body = '';
+  if (ph.id === 'clarify') body = clarifyView(a);
+  if (ph.id === 'structure' || ph.id === 'estimate') body = `<p class="hint">${ph.id === 'structure'
+      ? 'Baue die Formel: Faktoren benennen, Einheit wählen, Operation festlegen. Noch keine Zahlen.'
+      : 'Setze runde Werte ein und begründe jeden in einem Satz.'}</p>
+    <div class="board">${nodeView(a.tree, ph.id, 'main')}</div>`;
+  if (ph.id === 'check') body = checkView(p, a);
+  return `<main>
+    <section class="card"><div class="q">${esc(p.prompt)}</div>
+      <div class="sub">Antwort in: <b>${esc(UNITS[p.answerUnit].de)}</b> · ${isRanked(p) ? 'Rangliste' : 'Training (keine geprüfte Lösung)'}</div></section>
+    <ol class="steps">${steps}</ol>
+    <div class="timer">Phase ${esc(ph.de)}: <span id="clock">0</span>s / ${ph.budget}s</div>
+    ${body}
+    <div class="live" id="live"></div>
+    ${S.errors.length ? `<div class="err">${S.errors.map(esc).join('<br>')}</div>` : ''}
+    <div class="actions">${S.phase > 0 ? '<button data-act="back">Zurück</button>' : ''}
+      <button class="primary" data-act="next" ${S.busy ? 'disabled' : ''}>${S.busy ? 'Bewerte …' : S.phase === PHASES.length - 1 ? 'Abgeben' : 'Weiter'}</button></div>
+  </main>`;
+}
+
+function clarifyView(a) {
+  return `<p class="hint">Was würdest du die Interviewerin zuerst fragen? Wähle und formuliere bis zu drei Klärungen.</p>
+    ${a.clarifications.map((c, i) => `<div class="clar">
+      <label><input type="checkbox" data-clar-on="${i}" ${c.on ? 'checked' : ''}> ${esc(CLARIFY_TYPES[c.type])}</label>
+      ${c.on ? `<input type="text" data-clar-text="${i}" value="${esc(c.text)}" placeholder="z. B. Nur Stadt, ohne Agglomeration?">` : ''}</div>`).join('')}`;
+}
+
+function unitSelect(l) {
+  return `<select data-id="${l.id}" data-f="unit">${Object.entries(UNITS).map(([k, u]) => `<option value="${k}" ${k === l.unit ? 'selected' : ''}>${esc(u.de)}</option>`).join('')}</select>`;
+}
+
+function nodeView(n, mode, treeKey) {
+  if (n.kind === 'leaf') {
+    const est = mode === 'estimate' || mode === 'full';
+    return `<div class="leaf" data-node="${n.id}">
+      <div class="lrow"><input type="text" data-id="${n.id}" data-f="label" value="${esc(n.label)}" placeholder="Faktor, z. B. Einwohner Basel">${unitSelect(n)}</div>
+      ${est ? `<div class="lrow"><input type="text" inputmode="decimal" data-id="${n.id}" data-f="value" value="${n.value ?? ''}" placeholder="Wert, z. B. 200k">
+        <select data-id="${n.id}" data-f="reasonType"><option value="">Begründungsart …</option>${Object.entries(REASON_TYPES).map(([k, v]) => `<option value="${k}" ${k === n.reasonType ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <input type="text" data-id="${n.id}" data-f="reason" value="${esc(n.reason)}" placeholder="Ein Satz: warum diese Grössenordnung?">` : ''}
+      <div class="lbtn"><button data-act="split" data-id="${n.id}" data-tree="${treeKey}">aufteilen</button><button data-act="del" data-id="${n.id}" data-tree="${treeKey}">entfernen</button></div>
+    </div>`;
+  }
+  return `<div class="op" data-node="${n.id}">
+    <select data-id="${n.id}" data-f="op" data-tree="${treeKey}">${Object.entries(OPS).map(([k, o]) => `<option value="${k}" ${k === n.op ? 'selected' : ''}>${o.de}</option>`).join('')}</select>
+    <div class="kids">${n.children.map(c => nodeView(c, mode, treeKey)).join(`<div class="sym">${OPS[n.op].sym}</div>`)}</div>
+    <div class="lbtn"><button data-act="addleaf" data-id="${n.id}" data-tree="${treeKey}">+ Faktor</button><button data-act="addop" data-id="${n.id}" data-tree="${treeKey}">+ Teilrechnung</button></div>
+  </div>`;
+}
+
+function checkView(p, a) {
+  const ls = leaves(a.tree);
+  const selfTag = TIERS[S.settings.tier].selfTag;
+  return `
+    ${selfTag ? `<h3>1 · Faktoren zuordnen</h3><p class="hint">Jetzt erst siehst du die Referenzfaktoren. Ordne deine Faktoren zu – ehrlich, das ist deine Selbstprüfung.</p>
+      ${ls.map(l => `<div class="tag"><span>${esc(l.label || '–')}</span><select data-id="${l.id}" data-f="slot"><option value="">kein Referenzfaktor</option>${p.slots.map(s => `<option value="${s.id}" ${s.id === l.slot ? 'selected' : ''}>${esc(s.de)}</option>`).join('')}</select></div>`).join('')}` : ''}
+    <h3>2 · Plausibilität</h3>
+    <select data-a="benchmarkId"><option value="">Referenz wählen …</option>${p.benchmarks.map(b => `<option value="${b.id}" ${b.id === a.benchmarkId ? 'selected' : ''}>${esc(b.de)}</option>`).join('')}</select>
+    <input type="text" data-a="benchmarkNote" value="${esc(a.benchmarkNote)}" placeholder="Wie passt dein Ergebnis zu dieser Referenz?">
+    ${a.second ? `<div class="board second"><div class="sub">Gegenrechnung</div>${nodeView(a.second, 'full', 'second')}</div><button data-act="nosecond">Gegenrechnung entfernen</button>`
+      : '<button data-act="second">+ Gegenrechnung (zweiter Weg)</button>'}
+    <h3>3 · Intervall (90 % sicher)</h3>
+    <div class="lrow"><input type="text" data-a="low" value="${a.low ?? ''}" placeholder="Untergrenze"><input type="text" data-a="high" value="${a.high ?? ''}" placeholder="Obergrenze"></div>
+    <h3>4 · Schwächste Annahme</h3>
+    <select data-a="weakestId"><option value="">wählen …</option>${ls.map(l => `<option value="${l.id}" ${l.id === a.weakestId ? 'selected' : ''}>${esc(l.label)}</option>`).join('')}</select>
+    <h3>5 · So what?</h3>
+    <div class="sowhat">Das heisst: <input type="text" data-sw="what" value="${esc(a.soWhat.what)}" placeholder="z. B. der Markt reicht für 3 Filialen"> weil <input type="text" data-sw="why" value="${esc(a.soWhat.why)}" placeholder="z. B. eine Filiale braucht ~400 Kunden/Tag"></div>`;
+}
+
+function updateLive() {
+  const el = $('#live'); if (!el) return;
+  const p = S.problem, ev = evaluate(S.attempt.tree);
+  const ok = sameDim(ev.dim, dimOf(p.answerUnit));
+  const v = isFinite(ev.value) ? fmt(fromBase(ev.value, p.answerUnit)) : '–';
+  const unitErr = ev.errors.some(e => e.unit);
+  const unitTxt = ok && !unitErr ? '<span class="ok">✓ Einheit passt</span>' : '<span class="bad">✗ Einheit passt nicht</span>';
+  const phase = PHASES[S.phase].id;
+  el.innerHTML = phase === 'clarify' ? ''
+    : phase === 'structure' ? `${unitTxt} zu «${esc(UNITS[p.answerUnit].de)}»`
+    : `Ergebnis: <b>${v}</b> ${esc(UNITS[p.answerUnit].de)} · ${unitTxt}`;
+}
+
+function verdict() {
+  const r = S.result, p = S.problem;
+  const bars = Object.keys(WEIGHTS).map(k => {
+    const v = r.components[k];
+    return `<div class="bar"><span>${LABELS[k]}</span><div class="track"><div class="fill" style="width:${v == null ? 0 : Math.round(v * 100)}%"></div></div><span>${v == null ? 'zurückgestellt' : Math.round(v * 100)}</span></div>`;
+  }).join('');
+  const slotRows = r.perSlot.map(s => {
+    const sl = p.slots.find(x => x.id === s.slot);
+    return `<tr><td>${esc(sl.de)}</td><td>${fmt(s.value)}</td><td>${fmt(10 ** sl.range[0])}–${fmt(10 ** sl.range[1])}</td><td>${s.score === 1 ? '✓' : Math.round(s.score * 100)}</td></tr>`;
+  }).join('');
+  return `<main>
+    <section class="card hero"><div class="score">${r.total}</div><div>Punkte · +${S.gain.gained} XP</div>
+      ${S.gain.newBadges.length ? `<div class="badges">${S.gain.newBadges.map(b => `<span>${esc(BADGES[b])}</span>`).join('')}</div>` : ''}</section>
+    <section class="card"><div>Dein Ergebnis: <b>${fmt(r.finalValue)}</b> ${esc(UNITS[p.answerUnit].de)}${r.secondValue != null ? ` · Gegenrechnung: ${fmt(r.secondValue)}` : ''}</div>
+      ${r.truth != null ? `<div>Lösung: <b>${fmt(r.truth)}</b> <span class="sub">(${esc(p.truth.derivation || '')} – <a href="${esc(p.truth.source)}" target="_blank" rel="noopener">Quelle</a>)</span></div>`
+        : `<div class="sub">Keine geprüfte Lösung (${esc(p.truth.status)}). Treffsicherheit wird nicht bewertet.</div>`}
+      ${r.calibration != null ? `<div>Intervall: ${r.hit ? '<span class="ok">Treffer</span>' : '<span class="bad">daneben</span>'} · Kalibrierung ${Math.round(r.calibration * 100)}</div>` : ''}
+      ${r.bestTree ? `<div class="sub">Nächste Referenzstruktur: ${esc(r.bestTree.formula)}</div>` : ''}</section>
+    <section class="card">${bars}</section>
+    ${slotRows ? `<section class="card"><table><tr><th>Faktor</th><th>Dein Wert</th><th>Plausibel</th><th>Score</th></tr>${slotRows}</table></section>` : ''}
+    ${r.notes.length ? `<section class="card"><h3>Feedback</h3><ul>${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul></section>` : ''}
+    <div class="actions"><button data-act="start" data-id="${p.id}">Nochmal</button><button class="primary" data-act="home">Nächste Aufgabe</button></div>
+  </main>`;
+}
+
+function profileView() {
+  const p = S.profile;
+  const elo = Object.entries(p.elo).map(([k, v]) => { const [t, a] = k.split(':'); return `<tr><td>${esc(TIERS[t]?.de || t)}</td><td>${esc(ARCHETYPES[a] || a)}</td><td>${v}</td></tr>`; }).join('');
+  const bias = biasNotes(p, PROBLEMS);
+  return `<main>
+    <section class="card"><h2>${esc(levelOf(p.xp))}</h2><div>${p.xp} XP · Streak ${p.streak} Tage</div>
+      <div>Kalibrierung: ${p.calib.n ? `${p.calib.hits}/${p.calib.n} Intervalle getroffen (${Math.round(100 * p.calib.hits / p.calib.n)} %, Ziel 80–95 %)` : 'noch keine Intervalle'}</div></section>
+    <section class="card"><h3>Abzeichen</h3>${Object.keys(p.badges).length ? Object.entries(p.badges).map(([b, n]) => `<span class="pill">${esc(BADGES[b])} ×${n}</span>`).join(' ') : 'Noch keine.'}</section>
+    <section class="card"><h3>Rating je Archetyp (getrennt nach Stufe)</h3>${elo ? `<table>${elo}</table>` : 'Noch keine Ranglisten-Runden.'}</section>
+    <section class="card"><h3>Deine Muster</h3>${bias.length ? `<ul>${bias.map(b => `<li>${esc(b)}</li>`).join('')}</ul>` : 'Ab 3 Runden pro Faktor erscheinen hier deine Verzerrungen.'}</section>
+    <section class="card"><h3>Verlauf</h3><ul>${p.history.slice(0, 15).map(h => `<li>${h.at.slice(0, 10)} · ${esc(h.problem)} · ${esc(TIERS[h.tier]?.de || h.tier)} · ${h.total}</li>`).join('')}</ul>
+      <button data-act="reset">Profil zurücksetzen</button></section></main>`;
+}
+
+function settingsView() {
+  const s = S.settings;
+  return `<main><section class="card"><h3>Bewertungsstufe</h3>
+    ${Object.entries(TIERS).map(([k, t]) => `<label class="radio"><input type="radio" name="tier" value="${k}" ${k === s.tier ? 'checked' : ''}> ${esc(t.de)}${t.experimental ? ' <i>(experimentell)</i>' : ''}</label>`).join('')}
+    <p class="hint">Ohne KI: alles deterministisch, du ordnest selbst zu. Lokal/Frontier: ein Modell beantwortet nur geschlossene Fragen; Zahlen bewertet immer der Code. Ratings werden je Stufe getrennt geführt.</p></section>
+    <section class="card"><h3>Lokal (Ollama)</h3>
+      <input type="text" data-set="local.url" value="${esc(s.local.url)}" placeholder="http://localhost:11434">
+      <input type="text" data-set="local.model" value="${esc(s.local.model)}" placeholder="Modellname, z. B. qwen2.5:7b">
+      <p class="hint">Ollama mit OLLAMA_ORIGINS=* starten, damit der Browser zugreifen darf.</p></section>
+    <section class="card"><h3>Frontier (Claude API)</h3>
+      <input type="password" data-set="frontier.key" value="${esc(s.frontier.key)}" placeholder="API-Key (bleibt in diesem Browser)">
+      <input type="text" data-set="frontier.model" value="${esc(s.frontier.model)}" placeholder="Modell-ID, z. B. aus docs.claude.com">
+    </section></main>`;
+}
+
+// ---------- Ereignisse ----------
+function findTree(key) { return key === 'second' ? 'second' : 'tree'; }
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const act = b.dataset.act, id = b.dataset.id, a = S.attempt, tk = findTree(b.dataset.tree);
+  if (act === 'home') { S.view = 'home'; return render(); }
+  if (act === 'profile') { S.view = 'profile'; return render(); }
+  if (act === 'settings') { S.view = 'settings'; return render(); }
+  if (act === 'start') return start(PROBLEMS.find(p => p.id === id));
+  if (act === 'next') return nextPhase();
+  if (act === 'back') { S.phase--; S.phaseStart = Date.now(); return render(); }
+  if (act === 'reset') { if (confirmReset()) { S.profile = emptyProfile(); saveProfile(S.profile); } return render(); }
+  if (act === 'second') { a.second = newOp('mul'); return render(); }
+  if (act === 'nosecond') { a.second = null; return render(); }
+  if (act === 'addleaf') { findNode(a[tk], id).children.push(newLeaf()); return render(); }
+  if (act === 'addop') { findNode(a[tk], id).children.push(newOp('mul')); return render(); }
+  if (act === 'split') { const leaf = findNode(a[tk], id); a[tk] = replaceNode(a[tk], id, newOp('mul', [leaf, newLeaf()])); return render(); }
+  if (act === 'del') { a[tk] = removeNode(a[tk], id); return render(); }
+});
+
+let resetArmed = 0;
+function confirmReset() { const now = Date.now(); if (now - resetArmed < 3000) return true; resetArmed = now; alertInline('Zum Bestätigen innert 3 Sekunden nochmals klicken.'); return false; }
+function alertInline(msg) { const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg; document.body.append(el); setTimeout(() => el.remove(), 2500); }
+
+function findNode(n, id) {
+  if (n.id === id) return n;
+  if (n.kind === 'op') for (const c of n.children) { const f = findNode(c, id); if (f) return f; }
+  return null;
+}
+function findAny(id) { return findNode(S.attempt.tree, id) || (S.attempt.second && findNode(S.attempt.second, id)); }
+
+function onField(e, structural) {
+  const t = e.target, a = S.attempt;
+  if (t.dataset.f && t.dataset.id) {
+    const n = findAny(t.dataset.id); if (!n) return;
+    const f = t.dataset.f;
+    n[f] = f === 'value' ? parseNum(t.value) : t.value;
+    if (structural && (f === 'op' || f === 'unit')) return render();
+    return updateLive();
+  }
+  if (t.dataset.clarOn != null) { a.clarifications[t.dataset.clarOn].on = t.checked; return render(); }
+  if (t.dataset.clarText != null) { a.clarifications[t.dataset.clarText].text = t.value; return; }
+  if (t.dataset.a) { a[t.dataset.a] = ['low', 'high'].includes(t.dataset.a) ? parseNum(t.value) : t.value; return; }
+  if (t.dataset.sw) { a.soWhat[t.dataset.sw] = t.value; return; }
+  if (t.name === 'tier') { S.settings.tier = t.value; saveSettings(); return render(); }
+  if (t.dataset.set) { const [grp, key] = t.dataset.set.split('.'); S.settings[grp][key] = t.value.trim(); saveSettings(); }
+}
+document.addEventListener('input', e => onField(e, false));
+document.addEventListener('change', e => onField(e, true));
+
+setInterval(() => { const c = $('#clock'); if (c) c.textContent = Math.round((Date.now() - S.phaseStart) / 1000); }, 1000);
+
+render();
+
+</script>
+</body>
+</html>
