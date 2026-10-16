@@ -1,4 +1,14 @@
+<!-- BEGIN public-repo-header -->
+<div align="center">
+
 # Fermi-Arena
+
+<a href="https://github.com/blackmath88/fermi-arena"><img alt="Primary language: JavaScript" src="https://img.shields.io/badge/language-JavaScript-526078?style=flat"></a>
+<a href="https://github.com/blackmath88/fermi-arena/tree/main/docs"><img alt="Documentation" src="https://img.shields.io/badge/docs-guide-16796f?style=flat"></a>
+<a href="https://github.com/blackmath88/fermi-arena/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/blackmath88/fermi-arena?style=flat&amp;color=737373"></a>
+
+</div>
+<!-- END public-repo-header -->
 
 Gamified trainer for Fermi / market-sizing interview questions. You build a typed solution tree on a whiteboard; a **mostly deterministic judge** scores it. Models (if used at all) only answer narrow fixed-choice questions — numbers are always scored by code.
 
